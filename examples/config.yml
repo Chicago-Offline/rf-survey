@@ -1,0 +1,19 @@
+# Site config — copy to ~/.config/rf-survey/config.yml
+db: ~/.local/share/rf-survey/observations.db
+
+location:
+  mode: static          # static | gpsd
+  lat: 41.88
+  lon: -87.63
+  alt_m: 180
+  # mode: gpsd
+  # host: 127.0.0.1
+  # port: 2947
+
+devices:                # keyed by EEPROM serial
+  BENCH:
+    role: digital       # R820T2 — sensitivity-critical DMR dwell
+    gain: 49.6
+  SONDE:
+    role: analog        # E4000 — strong-signal FM work
+    gain: 42

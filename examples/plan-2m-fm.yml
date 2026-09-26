@@ -1,0 +1,13 @@
+# 2m amateur FM activity survey
+name: 2m-fm
+bands:
+  - {start_mhz: 144, stop_mhz: 148, step_khz: 12.5}
+sweep:
+  integration_s: 15
+  passes: 4
+dwell:
+  snr_db: 10
+  min_hits: 2
+  duration_s: 45
+  decoder: nfm
+  squelch_db: 5

@@ -1,0 +1,16 @@
+[project]
+name = "rf-survey"
+version = "0.1.0"
+description = "Multi-SDR RF landscape surveying tool: sweep, dwell, decode, ssrf-lite candidate evidence"
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+survey = "rfsurvey.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rfsurvey*"]

@@ -1,0 +1,13 @@
+# UHF business/industrial DMR hunt
+name: uhf-dmr
+bands:
+  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25}
+sweep:
+  integration_s: 20
+  passes: 0             # forever; bound externally or use --passes
+dwell:
+  snr_db: 12
+  min_hits: 3
+  duration_s: 90
+  decoder: dmr
+  squelch_db: 6
