@@ -232,11 +232,17 @@ class TestMonitorStore(unittest.TestCase):
         self.assertEqual(
             rows["Forest View 650"]["params"]["ctcss_hz"]["state"], "conflict")
 
-    def test_batch_claims_monitor_checks(self):
+    def test_batch_does_not_claim_monitor_checks_yet(self):
+        # build_batch() packages observations and beacons only -- ssrf-obs
+        # has no ingest path for monitor checks yet.  Claiming them here
+        # would mark them submitted without sending them, and
+        # unsubmitted_monitor_checks() filters on batch_id IS NULL, so the
+        # evidence could never be resent once the server side lands.
+        # They must stay pending until that ingest exists.
         self._chk(_t(), False, {})
         self.assertEqual(len(self.store.unsubmitted_monitor_checks()), 1)
         self.store.mark_batched("batch-1", "{}")
-        self.assertEqual(len(self.store.unsubmitted_monitor_checks()), 0)
+        self.assertEqual(len(self.store.unsubmitted_monitor_checks()), 1)
 
 
 class TestScheduler(unittest.TestCase):
