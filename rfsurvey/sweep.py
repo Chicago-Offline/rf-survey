@@ -9,6 +9,24 @@ class SweepError(Exception):
     pass
 
 
+# rtl_power cannot tune faster than this sample rate (USB bandwidth hard cap).
+_RTL_MAX_RATE_HZ = 3_200_000
+
+
+def _rtl_pass_windows(start_mhz, stop_mhz):
+    """Number of re-tuning windows rtl_power needs to cover the span.
+
+    rtl_power re-tunes in _RTL_MAX_RATE_HZ-wide windows and collects
+    integration_s seconds at each one.  The total one-pass wall time is
+    therefore n_windows * integration_s.  This must be strictly less than
+    the -e exit timer, or rtl_power never reaches its own exit check and
+    blocks until the Python timeout fires ~120 s later.
+    """
+    import math
+    span_hz = (stop_mhz - start_mhz) * 1e6
+    return max(1, math.ceil(span_hz / _RTL_MAX_RATE_HZ))
+
+
 def run_rtl_power(index, start_mhz, stop_mhz, step_khz, integration_s, gain=None):
     """One rtl_power pass -> [(freq_hz, db, bin_hz)]. Bounded lifetime via -e.
 
@@ -16,19 +34,29 @@ def run_rtl_power(index, start_mhz, stop_mhz, step_khz, integration_s, gain=None
     requested step_khz -- rtl_power auto-selects its own FFT size and does
     not honor the requested step exactly.  Every caller must carry this
     through rather than assume the configured step; see snap_channel().
+
+    -e is set to pass_s + 30 where pass_s = n_windows * integration_s.
+    Using a flat integration_s + 30 was wrong for wide spans: a 12 MHz
+    VHF band needs 4 tuning windows so one pass takes 40 s with -i 10,
+    which equalled -e 40 exactly -- rtl_power never checked its timer
+    between windows and blocked until the Python timeout fired.
     """
+    n_windows = _rtl_pass_windows(start_mhz, stop_mhz)
+    pass_s = n_windows * integration_s
+    e_s = pass_s + 30          # must be strictly > pass_s
+    hard_timeout = pass_s + 90  # Python-side hard kill, well after -e
     out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
     out.close()
     cmd = ["rtl_power", "-d", str(index),
            "-f", f"{start_mhz}M:{stop_mhz}M:{step_khz}k",
            "-i", str(integration_s), "-1",
-           "-e", str(integration_s + 30)]
+           "-e", str(e_s)]
     if gain is not None:
         cmd += ["-g", str(gain)]
     cmd.append(out.name)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=integration_s + 120)
+                           timeout=hard_timeout)
     except subprocess.TimeoutExpired:
         raise SweepError("rtl_power hung past its own -e bound")
     finally:

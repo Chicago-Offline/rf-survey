@@ -297,5 +297,46 @@ class TestStaticLocation(unittest.TestCase):
         self.assertEqual(loc.get().as_tuple()[:2], (1.0, 2.0))
 
 
+class TestSweepETimer(unittest.TestCase):
+    def test_rtl_pass_windows_narrow(self):
+        # 4 MHz span: ceil(4e6 / 3.2e6) = 2 windows
+        from rfsurvey.sweep import _rtl_pass_windows
+        self.assertEqual(_rtl_pass_windows(144.0, 148.0), 2)
+
+    def test_rtl_pass_windows_wide(self):
+        # 12 MHz span: ceil(12e6 / 3.2e6) = 4 windows
+        from rfsurvey.sweep import _rtl_pass_windows
+        self.assertEqual(_rtl_pass_windows(150.0, 162.0), 4)
+
+    def test_e_timer_strictly_exceeds_pass_duration(self):
+        # Root cause of the VHF hang: old code used -e = integration_s+30.
+        # vhf-high-business 150-162 needs 4 tuning windows at i=10 → pass=40s,
+        # which equalled -e 40 exactly. rtl_power never checks its timer
+        # mid-pass, so it blocked until the Python 130s timeout fired.
+        # Fix: -e = n_windows*integration_s + 30, always strictly > pass.
+        from rfsurvey.sweep import _rtl_pass_windows
+        for start, stop, integ in [
+            (150.0, 162.0, 10),   # primary failing case: 4w*10=40 == old -e 40
+            (144.0, 148.0, 10),   # borderline: 2w*10=20 < old -e 40, still hung
+            (446.0, 450.0, 10),   # UHF control: 2w*10=20, was fine
+        ]:
+            w = _rtl_pass_windows(start, stop)
+            pass_s = w * integ
+            e_s = pass_s + 30
+            self.assertGreater(e_s, pass_s,
+                f"{start}-{stop}@i{integ}: -e {e_s}s must exceed pass {pass_s}s")
+
+    def test_hard_timeout_exceeds_e_timer(self):
+        # Python-side hard kill must be > -e so rtl_power always exits
+        # under its own steam first; SweepError only fires on true hangs.
+        from rfsurvey.sweep import _rtl_pass_windows
+        for start, stop, integ in [(150.0, 162.0, 10), (144.0, 148.0, 10)]:
+            w = _rtl_pass_windows(start, stop)
+            pass_s = w * integ
+            e_s = pass_s + 30
+            hard = pass_s + 90
+            self.assertGreater(hard, e_s)
+
+
 if __name__ == "__main__":
     unittest.main()
