@@ -50,7 +50,13 @@ observers): WebSockets + TLS + token auth against `wsmqtt.chioff.com`
 Topics:
 
 - `rfsurvey/obs/<station_id>` — signed observation batches (JSON, gzip),
-  QoS 1
+  QoS 1. Every batch carries `schema: rfsurvey.obs.v1` — versioned from day
+  one (the durable part of trunk-recorder's ecosystem was its stable upload
+  schema, not the transport).
+- **Aggregate before publish**: sweep data goes up as per-bin summaries
+  (median/max/hit-count over the batch window), never raw bins — the
+  ElectroSense lesson (~100× bandwidth cut via PSD averaging). Dwell/decode
+  observations go up as events.
 - `rfsurvey/status/<station_id>` — heartbeat: uptime, receivers claimed,
   scan plan hash, last obs ts (retained)
 - `rfsurvey/cmd/<station_id>` — reserved for later (plan updates); OFF by
@@ -70,6 +76,10 @@ Small service (dev EC2 first, prod later):
   sqlite+litestream to start)
 - maintains derived tables: per-channel × per-station duty cycle, last
   heard, decode metadata (CC/TG/NAC/radio IDs), verification tier
+- maintains a per-station **reliability score** (SatNOGS-style): beacon
+  baseline health, heartbeat regularity, evidence contradiction rate.
+  Evidence from a degraded station is down-weighted in promotion rules
+  until the station recovers.
 
 The obs DB is **append-only evidence, deliberately outside ssrf-lite** —
 the git repo stays curated and lean; hourly observations don't churn it.
@@ -91,6 +101,12 @@ Promotion / flagging rules (aggregator policy, tunable):
 - `flagged`: decode metadata contradicts the ssrf record (wrong color
   code, unexpected talkgroups) → human review queue
 - `stale`: no V0+ at any in-range station for N days (default 90)
+
+**Trunked systems (P25 / DMR Cap+/Con+):** don't reinvent — a station may
+run trunk-recorder or sdrtrunk as a side decoder and submit its call
+metadata (and recordings) as V2/V3 evidence through the same batch path.
+rf-survey's own dwell pipeline stays for conventional/analog and discovery
+sweeps. This resolves PLAN.md's open question: integrate, don't reimplement.
 
 Hard rules inherited from PLAN.md still apply: energy gate before any
 decode is trusted (dsd fabricates sync on noise), SNR relative to
@@ -125,6 +141,63 @@ exported snapshot for offline builds):
   threshold at station(s) within X km; per-station SNR history gives a
   coarse receivability map from fixed sites, densified over time by
   mobile tracks
+
+## 7. Beacon calibration (shared reference signals)
+
+Chicago has constant-power licensed transmitters with known ERP and fixed
+locations (Willis/Hancock broadcast masts, NWS). Stations measure a shared
+reference list on schedule; the aggregator tracks long-term baselines.
+
+What it gives:
+
+- **Station health + drift detection** (the big win): a station whose median
+  on a reference drops N dB has a failed dongle, wet feedline, or moved
+  antenna — flagged automatically, no human noticing required.
+- **Coarse cross-station normalization within a band**: beacon-derived
+  offsets weight (never equate) receivability claims between stations.
+- **Gain sanity** after config changes.
+
+Rules that keep it honest:
+
+1. **Calibration is band-local.** Antenna response and tuner gain curves
+   differ across frequency; an FM-broadcast reading says nothing about
+   460 MHz. References per band of interest:
+   - VHF-high: **NWS 162.55 MHz (KWO39)** — continuous carrier, constant power
+   - FM broadcast for low-VHF sanity
+   - **ATSC pilot tones** (~470–600 MHz) for the UHF land-mobile band
+2. **Baselines are long-term medians** (days) — tropo/weather/multipath move
+   spot readings by a few dB.
+3. **Overload-aware**: broadcast signals can compress the front end at survey
+   gain; beacon-check passes may use their own gain/attenuation, recorded
+   with the measurement.
+4. Beacons bound **hardware variance, not propagation** — cross-station SNR
+   on a surveyed channel is still weighted evidence, not ground truth.
+
+Implementation: shared `references/chicago.yml` in this repo (freq, kind,
+expected-strong/weak hints), a `beacon-check` pass type in scan plans,
+aggregator-side baselines + deviation alerts feeding the station reliability
+score.
+
+## Prior art (what we reused, what we avoided)
+
+- **Reiter, 30C3 (2013), distributed RTL scanner array** — proved COTS
+  feasibility; his pitfalls (antenna variance, heterogeneous dongles) are
+  why per-channel-median SNR, no-cross-receiver comparison, and beacon
+  calibration are load-bearing here.
+- **ElectroSense / ElectroSense+** — dumb sensors / smart backend (adopted:
+  validation policy lives only in the aggregator), PSD aggregation before
+  upload (adopted). Its decay — open enrollment of uncalibrated volunteer
+  sensors nobody could trust — is why enrollment here is **manual and
+  small, by design. Open public enrollment is a non-goal.**
+- **trunk-recorder / OpenMHz / rdio-scanner** — healthiest living
+  capture→ingest ecosystem: stable versioned upload schema (adopted),
+  per-site keys with revocation (adopted), solved trunked-call recording
+  (integrated as side decoder, not reimplemented).
+- **SatNOGS** — station registry, observation vetting, reliability scores
+  (adopted), retained status topics as a free network dashboard.
+- **BigWhoop, rtlsdr-scanner+GPS** — dead; global open-ended ambition kills
+  these projects. Regional + purpose-driven (feed ssrf-lite / codeplugs) is
+  the survivable niche.
 
 ## Milestones
 
