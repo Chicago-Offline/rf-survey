@@ -59,6 +59,34 @@ CREATE TABLE IF NOT EXISTS beacon_readings (
   batch_id TEXT
 );
 CREATE INDEX IF NOT EXISTS beacon_rx ON beacon_readings(receiver, ref_id, ts);
+-- Monitoring of known channels (targets), as opposed to discovery.
+-- Every check is recorded INCLUDING the silent ones: that is the whole
+-- point of the table.  Without a row for "looked, heard nothing" there
+-- is no way to distinguish a quiet channel from one nobody ever visited,
+-- and "last heard" becomes unanswerable -- which is exactly the gap this
+-- table closes.  heard=0 rows are the majority and are not noise.
+--
+-- Keyed by (receiver, freq_hz, target) rather than freq alone: two
+-- targets can legitimately share a frequency (contested channels, e.g.
+-- two GMRS machines on 462.650 discriminated only by tone), and folding
+-- them together would average away the disagreement we are trying to see.
+CREATE TABLE IF NOT EXISTS monitor_checks (
+  id INTEGER PRIMARY KEY,
+  ts REAL NOT NULL,
+  receiver TEXT NOT NULL,
+  target TEXT NOT NULL,             -- target name, stable across runs
+  ssrf_id TEXT,                     -- catalog join key, NULL for local hypotheses
+  freq_hz INTEGER NOT NULL,
+  decoder TEXT,
+  heard INTEGER NOT NULL DEFAULT 0, -- 1 = decoder-level activity, not just energy
+  snr_db REAL,                      -- energy-gate SNR, recorded even when silent
+  params TEXT,                      -- {param: {state, observed, note}} JSON
+  meta TEXT,
+  lat REAL, lon REAL, alt_m REAL, fix TEXT,
+  batch_id TEXT
+);
+CREATE INDEX IF NOT EXISTS mon_target ON monitor_checks(receiver, freq_hz, target, ts);
+CREATE INDEX IF NOT EXISTS mon_heard ON monitor_checks(target, heard, ts);
 """
 
 # Added columns for existing databases; failures mean the column exists.
@@ -111,6 +139,140 @@ class Store:
              1 if gated else 0, json.dumps(meta or {}), *fix.as_tuple()))
         self.db.commit()
 
+    # ---- monitoring of known channels ----
+
+    def add_monitor_check(self, receiver, target, heard, snr_db, params, meta,
+                          fix):
+        self.db.execute(
+            "INSERT INTO monitor_checks(ts,receiver,target,ssrf_id,freq_hz,"
+            "decoder,heard,snr_db,params,meta,lat,lon,alt_m,fix)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (time.time(), receiver, target["name"], target.get("ssrf_id"),
+             target["freq_hz"], target.get("decoder"), 1 if heard else 0,
+             snr_db, json.dumps(params or {}), json.dumps(meta or {}),
+             *fix.as_tuple()))
+        self.db.commit()
+
+    def last_checked(self, receiver):
+        """{(freq_hz, target): ts} of the most recent check, heard or not.
+
+        Drives the scheduler, so it must count silent checks: if it only
+        counted hearings, a permanently quiet target would look forever
+        overdue and starve every other target on the list.
+        """
+        return {(r[0], r[1]): r[2] for r in self.db.execute(
+            "SELECT freq_hz, target, MAX(ts) FROM monitor_checks"
+            " WHERE receiver=? GROUP BY freq_hz, target", (receiver,))}
+
+    def monitor_status(self, receiver=None, targets=None):
+        """Per-target rollup: last heard, last checked, who heard it.
+
+        This is the milestone-1 answer: one row per channel we care about,
+        with last-heard and parameter state, including targets that have
+        never been heard at all (those still get a row -- an unheard
+        target is a finding, not an omission).
+        """
+        args = []
+        where = ""
+        if receiver:
+            where = " WHERE receiver=?"
+            args.append(receiver)
+        rows = self.db.execute(
+            "SELECT target, freq_hz, MAX(ssrf_id), COUNT(*) AS checks,"
+            " SUM(heard) AS hearings,"
+            " MAX(CASE WHEN heard=1 THEN ts END) AS last_heard,"
+            " MAX(ts) AS last_checked,"
+            " COUNT(DISTINCT CASE WHEN heard=1 THEN receiver END) AS rx_heard"
+            " FROM monitor_checks" + where +
+            " GROUP BY target, freq_hz ORDER BY target", args).fetchall()
+        cols = ("target", "freq_hz", "ssrf_id", "checks", "hearings",
+                "last_heard", "last_checked", "rx_heard")
+        out = [dict(zip(cols, r)) for r in rows]
+        for row in out:
+            row["params"] = self.param_state(row["target"], row["freq_hz"])
+        if targets:
+            known = {(t["freq_hz"], t["name"]) for t in targets}
+            seen = {(r["freq_hz"], r["target"]) for r in out}
+            for t in targets:
+                if (t["freq_hz"], t["name"]) not in seen:
+                    out.append({"target": t["name"], "freq_hz": t["freq_hz"],
+                                "ssrf_id": t.get("ssrf_id"), "checks": 0,
+                                "hearings": 0, "last_heard": None,
+                                "last_checked": None, "rx_heard": 0,
+                                "params": {}})
+            out = [r for r in out
+                   if (r["freq_hz"], r["target"]) in known] or out
+            out.sort(key=lambda r: r["target"])
+        return out
+
+    def param_state(self, target, freq_hz, hearings_for_verified=2):
+        """Aggregate per-parameter verification across all checks.
+
+        Promotion rule (Eric, 2026-09-28: a single station CAN earn
+        verified): a parameter is `verified` once it has been measured
+        consistently on `hearings_for_verified` separate hearings, from
+        one receiver or many.  Corroborating receivers are reported
+        alongside rather than required, so a one-station site is not
+        permanently stuck at unverified -- while still distinguishing
+        "measured twice here" from "independently corroborated".
+
+        A conflict is sticky and always wins: once two checks disagree
+        with the catalog, later agreement does not erase it.  Silence
+        never downgrades anything, because a silent check grades nothing.
+        """
+        rows = self.db.execute(
+            "SELECT receiver, params, ts FROM monitor_checks"
+            " WHERE target=? AND freq_hz=? AND heard=1 AND params IS NOT NULL"
+            " ORDER BY ts", (target, freq_hz)).fetchall()
+        agg = {}
+        for receiver, praw, ts in rows:
+            try:
+                params = json.loads(praw) or {}
+            except (TypeError, ValueError):
+                continue
+            for key, v in params.items():
+                a = agg.setdefault(key, {
+                    "state": "unverified", "observed": None, "note": None,
+                    "hits": 0, "conflicts": 0, "receivers": set(),
+                    "last_ts": None, "observed_values": []})
+                st = v.get("state")
+                a["last_ts"] = ts
+                if st == "conflict":
+                    a["conflicts"] += 1
+                    a["state"] = "conflict"
+                    a["observed"] = v.get("observed")
+                    a["note"] = v.get("note")
+                elif st == "verified":
+                    a["hits"] += 1
+                    a["receivers"].add(receiver)
+                    if a["state"] != "conflict":
+                        a["observed"] = v.get("observed")
+                elif st == "suspect" and a["state"] == "unverified":
+                    a["note"] = v.get("note")
+                    a["state"] = "suspect"
+                elif a["state"] == "unverified":
+                    a["note"] = v.get("note")
+                if v.get("observed") is not None:
+                    a["observed_values"].append(v["observed"])
+        for key, a in agg.items():
+            a["receivers"] = sorted(a["receivers"])
+            if a["state"] != "conflict" and a["hits"] >= hearings_for_verified:
+                a["state"] = "verified"
+            elif a["state"] not in ("conflict", "suspect") and a["hits"]:
+                a["state"] = "measured"   # seen once; needs one more hearing
+            a["corroborated"] = len(a["receivers"]) >= 2
+            a.pop("observed_values", None)
+        return agg
+
+    def unsubmitted_monitor_checks(self):
+        cols = ("id", "ts", "receiver", "target", "ssrf_id", "freq_hz",
+                "decoder", "heard", "snr_db", "params", "meta",
+                "lat", "lon", "alt_m", "fix")
+        return [dict(zip(cols, r)) for r in self.db.execute(
+            "SELECT id,ts,receiver,target,ssrf_id,freq_hz,decoder,heard,"
+            "snr_db,params,meta,lat,lon,alt_m,fix FROM monitor_checks"
+            " WHERE batch_id IS NULL").fetchall()]
+
     def active_channels(self, receiver=None, min_snr=6.0):
         """Channels with observed activity, with hit counts and best SNR."""
         q = ("SELECT freq_hz, COUNT(*), MAX(snr_db), MAX(ts), receiver,"
@@ -143,6 +305,9 @@ class Store:
             (batch_id,))
         self.db.execute(
             "UPDATE beacon_readings SET batch_id=? WHERE batch_id IS NULL",
+            (batch_id,))
+        self.db.execute(
+            "UPDATE monitor_checks SET batch_id=? WHERE batch_id IS NULL",
             (batch_id,))
         self.db.execute(
             "INSERT INTO batches(id,created,acked,payload) VALUES(?,?,0,?)",

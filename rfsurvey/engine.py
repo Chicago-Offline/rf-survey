@@ -3,7 +3,7 @@ import collections
 import logging
 import time
 
-from . import devices, sweep, dwell as dwell_mod
+from . import devices, sweep, dwell as dwell_mod, monitor as monitor_mod
 from .store import Store
 from .location import make_location
 
@@ -68,6 +68,14 @@ def run(cfg, plan, serial, force=False, max_passes=None):
     hits_count = collections.Counter()
     dwelled = {}
     medians = {}
+    mon_cfg = plan.get("monitor") or {}
+    mon_targets = mon_cfg.get("resolved") or []
+    # Airtime reference for the monitor budget: the first pass has no
+    # measured sweep time yet, so assume 4 min and correct from pass 2 on.
+    last_sweep_s = None
+    if mon_targets:
+        log.info("monitoring %d known target(s) at %d%% duty",
+                 len(mon_targets), mon_cfg["duty_pct"])
 
     with devices.Claim(serial, force=force) as claim:
         idx = claim.index
@@ -75,6 +83,31 @@ def run(cfg, plan, serial, force=False, max_passes=None):
         n = 0
         while True:
             n += 1
+            # Monitoring runs FIRST and unconditionally -- it must not be
+            # gated on sweep energy, because that gate is exactly what
+            # makes a quiet known channel invisible.  A silent target
+            # still gets a row saying we looked, which is what makes
+            # "last heard" answerable at all.
+            if mon_targets:
+                budget = mon_cfg.get("budget_s")
+                if budget is None:
+                    ref = last_sweep_s if last_sweep_s else 240.0
+                    budget = max(30.0, ref * mon_cfg["duty_pct"] / 100.0)
+                try:
+                    checked, heard, conflicts = monitor_mod.run_due(
+                        idx, store, serial, mon_targets, loc.get,
+                        gain=gain, budget_s=budget)
+                    if checked:
+                        log.info("pass %d monitor: %d checked, %d heard, "
+                                 "%d conflict(s)", n, checked, heard,
+                                 conflicts)
+                except Exception as e:
+                    # Monitoring must never take the discovery sweep down
+                    # with it; the radio claim is held by the caller.
+                    log.warning("monitor pass failed: %s", e)
+                    if not devices.is_claimable(idx):
+                        devices.release(idx)
+            sweep_t0 = time.time()
             for band in plan["bands"]:
                 bdwell = band_dwell(band, plan)
                 fix = loc.get()
@@ -146,6 +179,7 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                                           bdwell["duration_s"],
                                           bdwell["decoder"],
                                           gated, meta, loc.get())
+            last_sweep_s = time.time() - sweep_t0
             if passes and n >= passes:
                 log.info("completed %d passes, exiting cleanly", n)
                 return

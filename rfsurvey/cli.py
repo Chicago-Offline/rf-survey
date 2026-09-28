@@ -1,7 +1,9 @@
 """survey CLI."""
 import argparse
+import json
 import logging
 import sys
+import time
 
 import yaml
 
@@ -176,6 +178,107 @@ def cmd_beacon_check(args, cfg):
     return 0
 
 
+def _ago(ts, now=None):
+    """Human 'how long since', or 'never' -- never blank.
+
+    A blank cell reads as a rendering gap; "never" is a finding.  A target
+    that has never been heard is exactly the kind of row worth looking at.
+    """
+    if not ts:
+        return "never"
+    d = max(0, (now or time.time()) - ts)
+    if d < 90:
+        return f"{int(d)}s"
+    if d < 5400:
+        return f"{int(d // 60)}m"
+    if d < 172800:
+        return f"{int(d // 3600)}h"
+    return f"{int(d // 86400)}d"
+
+
+def _param_summary(params):
+    """Compact per-parameter verification state for the table.
+
+    Conflicts are listed first and never abbreviated away: a conflict is
+    the single most actionable thing this table can report, because it
+    means the catalog and the radio disagree.
+    """
+    if not params:
+        return "-"
+    marks = {"verified": "ok", "measured": "1x", "conflict": "CONFLICT",
+             "suspect": "suspect", "unverified": "?", "no_claim": "-"}
+    order = {"conflict": 0, "suspect": 1, "measured": 2, "unverified": 3,
+             "verified": 4, "no_claim": 5}
+    items = sorted(params.items(), key=lambda kv: order.get(kv[1]["state"], 9))
+    out = []
+    for key, v in items:
+        label = key.replace("_hz", "").replace("_code", "")
+        mark = marks.get(v["state"], v["state"])
+        obs = v.get("observed")
+        if v["state"] == "conflict" and obs is not None:
+            out.append(f"{label}={obs}!{mark}")
+        elif v["state"] in ("verified", "measured") and obs is not None:
+            out.append(f"{label}={obs}:{mark}")
+        else:
+            out.append(f"{label}:{mark}")
+    return " ".join(out)
+
+
+def cmd_monitor_status(args, cfg):
+    """Milestone 1 answer: per known channel, last heard + params verified.
+
+    Pass --plan to include targets that have never produced a single
+    check.  Without it this can only report channels already in the
+    database, which would quietly hide a target that has never been
+    visited at all -- the exact blind spot monitoring exists to remove.
+    """
+    store = Store(cfg["db"])
+    targets = None
+    if args.plan:
+        plan = config.load_plan(args.plan)
+        targets = (plan.get("monitor") or {}).get("resolved") or []
+        if not targets:
+            print(f"# {args.plan} has no monitor targets", file=sys.stderr)
+    rows = store.monitor_status(receiver=args.receiver, targets=targets)
+    if not rows:
+        print("no monitor checks recorded yet — run a plan with a "
+              "'monitor:' block", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+
+    now = time.time()
+    print(f"{'CHANNEL':<26}{'MHZ':>11}  {'LAST HEARD':>10}{'CHECKED':>9}"
+          f"{'HEARD':>8}{'RX':>4}  PARAMS")
+    for r in rows:
+        heard = f"{r['hearings'] or 0}/{r['checks'] or 0}"
+        print(f"{r['target'][:26]:<26}{r['freq_hz']/1e6:>11.4f}  "
+              f"{_ago(r['last_heard'], now):>10}{_ago(r['last_checked'], now):>9}"
+              f"{heard:>8}{r['rx_heard'] or 0:>4}  "
+              f"{_param_summary(r['params'])}")
+
+    silent = [r for r in rows if not r["hearings"]]
+    conflicts = [r for r in rows
+                 if any(v["state"] == "conflict" for v in r["params"].values())]
+    unchecked = [r for r in rows if not r["checks"]]
+    print()
+    if conflicts:
+        print(f"# {len(conflicts)} channel(s) CONFLICT with ssrf-lite: "
+              f"{', '.join(r['target'] for r in conflicts)}", file=sys.stderr)
+    if silent:
+        print(f"# {len(silent)} checked but never heard — could be genuinely "
+              f"quiet, out of range, or wrong in the catalog.", file=sys.stderr)
+    if unchecked:
+        print(f"# {len(unchecked)} target(s) never checked yet.",
+              file=sys.stderr)
+    print("# 'ok' = parameter measured consistently on >=2 hearings. "
+          "'1x' = seen once, needs one more. RX = distinct receivers that "
+          "heard it (>=2 is independent corroboration).", file=sys.stderr)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="survey",
         description="Multi-SDR RF landscape surveying (receive-only, always)")
@@ -227,12 +330,20 @@ def main(argv=None):
                     help="take the device from current holders")
     bc.add_argument("--json", action="store_true")
 
+    ms = sub.add_parser("monitor-status",
+                        help="per known channel: last heard + params verified")
+    ms.add_argument("--plan", help="scan plan YAML, to include targets that "
+                                   "have never been checked")
+    ms.add_argument("--receiver", help="filter by device serial")
+    ms.add_argument("--json", action="store_true")
+
     args = p.parse_args(argv)
     cfg = config.load_config(args.config)
     return {"devices": cmd_devices, "run": cmd_run, "release": cmd_release,
             "report": cmd_report, "candidates": cmd_candidates,
             "station-init": cmd_station_init, "submit": cmd_submit,
-            "beacon-check": cmd_beacon_check}[args.cmd](args, cfg)
+            "beacon-check": cmd_beacon_check,
+            "monitor-status": cmd_monitor_status}[args.cmd](args, cfg)
 
 
 if __name__ == "__main__":

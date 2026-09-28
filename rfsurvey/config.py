@@ -81,4 +81,47 @@ def load_plan(path):
             raise ConfigError(
                 f"unknown decoder {dec!r}: known decoders are "
                 f"{', '.join(sorted(DECODERS))}")
+
+    # ---- monitor block (optional) ----
+    # Monitoring is the other half of the mission: bands answer "what is
+    # out there", targets answer "is this specific known system still
+    # there, and are its published parameters real".  Optional, so every
+    # existing discovery-only plan keeps loading unchanged.
+    mon = plan.get("monitor") or {}
+    if mon:
+        mon.setdefault("interval_s", 900)   # revisit each target this often
+        mon.setdefault("duration_s", 20)    # shorter than a discovery dwell
+        mon.setdefault("decoder", "nfm")
+        mon.setdefault("squelch_db", 6.0)
+        # Share of each pass's airtime given to monitoring.  Capped well
+        # below 100 because discovery must not starve: the two missions
+        # share one dongle, and a plan that spends all its time
+        # confirming what we already know stops finding anything new.
+        mon.setdefault("duty_pct", 30)
+        duty = mon["duty_pct"]
+        if not (isinstance(duty, (int, float)) and 0 < duty <= 80):
+            raise ConfigError(
+                f"monitor.duty_pct must be >0 and <=80: {duty!r}")
+        for key in ("interval_s", "duration_s"):
+            v = mon[key]
+            if not (isinstance(v, (int, float)) and v > 0):
+                raise ConfigError(f"monitor.{key} must be positive: {v!r}")
+        dec = mon.get("decoder")
+        if dec is not None and dec not in DECODERS:
+            raise ConfigError(
+                f"unknown monitor decoder {dec!r}: known decoders are "
+                f"{', '.join(sorted(DECODERS))}")
+        # Resolve targets now so a bad target file or a misspelled expect
+        # key fails at startup, not hours into an unattended run -- same
+        # reasoning as the decoder check above.
+        from .targets import load_targets
+        targets = load_targets(mon, base_dir=os.path.dirname(
+            os.path.abspath(os.path.expanduser(path))))
+        for t in targets:
+            if t["decoder"] not in DECODERS:
+                raise ConfigError(
+                    f"monitor target {t['name']!r}: unknown decoder "
+                    f"{t['decoder']!r}")
+        mon["resolved"] = targets
+    plan["monitor"] = mon
     return plan
