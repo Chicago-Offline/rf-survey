@@ -27,7 +27,8 @@ class FakeStation:
 def seeded_store(path):
     s = Store(path)
     s.add_sweep("BENCH", "uhf-dmr", 450_000_000, 470_000_000, 6250, FakeFix(),
-                [(460_000_000, -40.0), (460_000_000, -38.0), (460_006_250, -60.0)])
+                [(460_000_000, -40.0, 6250.0), (460_000_000, -38.0, 6250.0),
+                 (460_006_250, -60.0, 6250.0)])
     s.add_observation("BENCH", 460_000_000, 18.5, 90, "dmr", True,
                       {"cc": 9, "tgs": [100]}, FakeFix())
     return s
