@@ -58,8 +58,8 @@ def _parse_csv(path):
     return rows
 
 
-def snap_channel(freq_hz, bin_hz, raster_hz=6250):
-    """Best-effort snap of a raw FFT bin center onto the channel raster.
+def snap_channel(freq_hz, bin_hz, raster_hz=6250, tolerance_hz=None):
+    """Best-effort snap of a measured frequency onto the channel raster.
 
     rtl_power auto-selects its own FFT bin width from internal constraints
     (FFT size vs. sample rate) -- it does NOT honor the configured
@@ -69,17 +69,78 @@ def snap_channel(freq_hz, bin_hz, raster_hz=6250):
     grid.  A raw bin center is therefore essentially never a real channel
     frequency -- it's somewhere within +/- half a bin of one.
 
-    Snap only when that's unambiguous: the bin center must land within
-    half the ACTUAL (reported) bin width of a raster point.  Otherwise
-    say so honestly rather than force a guess -- the caller keeps the raw
-    bin frequency and flags it unsnapped.
+    Snap only when that's unambiguous: the measurement must land within
+    tolerance of a raster point.  Otherwise say so honestly rather than
+    force a guess -- the caller keeps the raw frequency and flags it
+    unsnapped.
+
+    tolerance_hz overrides the default half-bin gate.  That default is
+    right for a raw wideband sweep bin, where bin width dominates the
+    error.  After a narrow refine_carrier() pass the bin is ~100 Hz and
+    the limiting error is instead the receiver's own frequency accuracy
+    (PPM), so the caller passes a tolerance reflecting that.
+
+    Either way the tolerance is clamped below half the raster spacing:
+    a looser gate would "snap" every frequency, including energy sitting
+    genuinely between channels, which is how a coarse bin turns into a
+    confidently wrong channel number.
+
+    The hard gate comes first: if the bin is wider than the raster
+    spacing, the +/- half-bin uncertainty covers more than one raster
+    point and NO amount of closeness identifies a channel.  A coarse bin
+    frequently lands near some raster point purely by chance, and often
+    the wrong one -- a 3906 Hz sweep bin at 159.196875 MHz sits 625 Hz
+    from 159.1975 while the real carrier is 159.1950.  Refuse outright
+    rather than emit a confidently wrong channel; refine_carrier() exists
+    to make the measurement good enough to pass this gate.
 
     Returns (channel_hz, snapped: bool).
     """
+    if bin_hz >= raster_hz:
+        return freq_hz, False
     snapped_hz = round(freq_hz / raster_hz) * raster_hz
-    if abs(freq_hz - snapped_hz) <= bin_hz / 2:
+    tol = bin_hz / 2 if tolerance_hz is None else tolerance_hz
+    tol = min(tol, raster_hz * 0.4)
+    if abs(freq_hz - snapped_hz) <= tol:
         return snapped_hz, True
     return freq_hz, False
+
+
+def refine_carrier(index, freq_hz, integration_s=4, gain=None,
+                   search_hz=5000, span_hz=48_000, dc_offset_hz=12_000):
+    """Narrow high-resolution re-measure of a candidate's true center.
+
+    The wideband sweep's bin width is coarser than the channel raster
+    (measured on MuehlMini VHF: 3906.25 Hz bins against a 2.5 kHz raster),
+    so a sweep bin center cannot identify a channel by itself.  Two
+    adjacent bins straddling one real carrier snap to two different raster
+    points -- that is exactly how 159.1950 MHz got recorded as both
+    159.19375 and 159.196875.  Re-measure a narrow span so bin width falls
+    far below the raster, and report where the energy actually peaks.
+
+    The window is deliberately placed off-center.  rtl_power leaves a DC
+    spike at each hop center; at this span that spike would sit right on
+    the candidate and masquerade as the carrier.  Shifting by
+    dc_offset_hz puts it clear of the search region, and a guard band
+    drops it outright.
+
+    Returns (carrier_hz, bin_hz, snr_db).  carrier_hz is None when nothing
+    rises above the local noise floor.
+    """
+    center = freq_hz - dc_offset_hz
+    lo = (center - span_hz / 2) / 1e6
+    hi = (center + span_hz / 2) / 1e6
+    rows = run_rtl_power(index, lo, hi, 0.1, integration_s, gain)
+    if not rows:
+        return None, None, 0.0
+    med = statistics.median(d for _, d, _s in rows)
+    guard = max(2000.0, rows[0][2] * 2)
+    cand = [(f, d, s) for f, d, s in rows
+            if abs(f - freq_hz) <= search_hz and abs(f - center) > guard]
+    if not cand:
+        return None, None, 0.0
+    f_peak, d_peak, bin_hz = max(cand, key=lambda r: r[1])
+    return f_peak, bin_hz, round(d_peak - med, 1)
 
 
 def snr_hits(rows, medians, threshold_db):
