@@ -80,7 +80,7 @@ def cmd_station_init(args, cfg):
 def cmd_submit(args, cfg):
     import time as _time
     from . import station as station_mod, submit as submit_mod
-    from .location import provider as loc_provider
+    from .location import make_location as loc_provider
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     st = station_mod.Station.load(cfg)
