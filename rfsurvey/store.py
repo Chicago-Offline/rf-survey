@@ -38,6 +38,27 @@ CREATE TABLE IF NOT EXISTS batches (
   acked INTEGER DEFAULT 0,          -- 1 = broker confirmed receipt
   payload TEXT NOT NULL             -- signed envelope JSON, for retransmit
 );
+-- Beacon calibration readings (NETWORK.md S7).  Keyed by OBSERVER
+-- (receiver), never by station: two dongles on one host have different
+-- antennas, gains and front ends, and averaging them smears exactly the
+-- hardware variance these readings exist to detect.
+CREATE TABLE IF NOT EXISTS beacon_readings (
+  id INTEGER PRIMARY KEY,
+  ts REAL NOT NULL,
+  receiver TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  freq_hz INTEGER NOT NULL,
+  band TEXT,
+  coverage TEXT NOT NULL,           -- ok | no_reference | unverified
+  signal_db REAL,                   -- absolute: catches a front end going deaf
+  noise_db REAL,
+  snr_db REAL,                      -- survives a gain change; baseline metric
+  gain REAL,
+  pinned INTEGER DEFAULT 0,         -- 1 = gain pinned; unpinned never baselines
+  status TEXT NOT NULL,             -- ok | not_heard | no_reference | error
+  batch_id TEXT
+);
+CREATE INDEX IF NOT EXISTS beacon_rx ON beacon_readings(receiver, ref_id, ts);
 """
 
 # Added columns for existing databases; failures mean the column exists.
@@ -121,6 +142,9 @@ class Store:
             "UPDATE observations SET batch_id=? WHERE batch_id IS NULL",
             (batch_id,))
         self.db.execute(
+            "UPDATE beacon_readings SET batch_id=? WHERE batch_id IS NULL",
+            (batch_id,))
+        self.db.execute(
             "INSERT INTO batches(id,created,acked,payload) VALUES(?,?,0,?)",
             (batch_id, time.time(), envelope_json))
         self.db.commit()
@@ -133,6 +157,62 @@ class Store:
     def ack_batch(self, batch_id):
         self.db.execute("UPDATE batches SET acked=1 WHERE id=?", (batch_id,))
         self.db.commit()
+
+    # ---- beacon calibration (NETWORK.md S7) ----
+
+    def add_beacon_reading(self, receiver, ref_id, freq_hz, band, coverage,
+                           signal_db, noise_db, snr_db, gain, status,
+                           pinned=False):
+        self.db.execute(
+            "INSERT INTO beacon_readings(ts,receiver,ref_id,freq_hz,band,"
+            "coverage,signal_db,noise_db,snr_db,gain,pinned,status)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (time.time(), receiver, ref_id, freq_hz, band, coverage,
+             signal_db, noise_db, snr_db, gain, 1 if pinned else 0, status))
+        self.db.commit()
+
+    def beacon_history(self, receiver, ref_id, days=7, pinned_only=True):
+        """Readings for one observer/reference, newest first.
+
+        pinned_only drops AGC readings: absolute dB taken under AGC is not
+        comparable between passes, so it must never enter a baseline.
+        """
+        q = ("SELECT ts,signal_db,noise_db,snr_db,gain,status,coverage"
+             " FROM beacon_readings WHERE receiver=? AND ref_id=? AND ts>=?")
+        args = [receiver, ref_id, time.time() - days * 86400]
+        if pinned_only:
+            q += " AND pinned=1"
+        q += " ORDER BY ts DESC"
+        cols = ("ts", "signal_db", "noise_db", "snr_db", "gain", "status",
+                "coverage")
+        return [dict(zip(cols, r)) for r in self.db.execute(q, args).fetchall()]
+
+    def beacon_latest(self, receiver=None):
+        """Most recent reading per (receiver, ref_id) — the rffeed view."""
+        q = ("SELECT b.receiver,b.ref_id,b.freq_hz,b.band,b.coverage,"
+             "b.signal_db,b.noise_db,b.snr_db,b.gain,b.pinned,b.status,b.ts"
+             " FROM beacon_readings b JOIN (SELECT receiver,ref_id,MAX(ts) t"
+             " FROM beacon_readings GROUP BY receiver,ref_id) m"
+             " ON m.receiver=b.receiver AND m.ref_id=b.ref_id AND m.t=b.ts")
+        args = []
+        if receiver:
+            q += " WHERE b.receiver=?"
+            args.append(receiver)
+        q += " ORDER BY b.receiver, b.freq_hz"
+        cols = ("receiver", "ref_id", "freq_hz", "band", "coverage",
+                "signal_db", "noise_db", "snr_db", "gain", "pinned", "status",
+                "ts")
+        return [dict(zip(cols, r)) for r in self.db.execute(q, args).fetchall()]
+
+    def unsubmitted_beacons(self):
+        """Beacon readings not yet packaged into a batch."""
+        cols = ("id", "ts", "receiver", "ref_id", "freq_hz", "band",
+                "coverage", "signal_db", "noise_db", "snr_db", "gain",
+                "pinned", "status")
+        return [dict(zip(cols, r)) for r in self.db.execute(
+            "SELECT id,ts,receiver,ref_id,freq_hz,band,coverage,signal_db,"
+            "noise_db,snr_db,gain,pinned,status FROM beacon_readings"
+            " WHERE batch_id IS NULL").fetchall()]
 
     def observations_for(self, freq_hz, tol_hz=6250):
         return self.db.execute(

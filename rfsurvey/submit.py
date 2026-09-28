@@ -17,15 +17,43 @@ log = logging.getLogger(__name__)
 SCHEMA_ID = "rfsurvey.obs.v1"
 
 
-def build_batch(store, station, site=None):
+def observer_descriptors(cfg):
+    """Per-observer descriptors for the batch `receivers` block (NETWORK.md S1).
+
+    The observer is `(station_id, receiver)` — one SDR plus the antenna and
+    placement actually attached to it. The aggregator needs the antenna to
+    decide which beacon references an observer may legitimately be scored
+    against; without it, readings are recorded but unscoreable.
+    """
+    out = []
+    for serial, d in sorted((cfg.get("devices") or {}).items()):
+        d = d or {}
+        desc = {"receiver": serial}
+        for k in ("role", "gain", "floor_offset_db"):
+            if d.get(k) is not None:
+                desc[k] = d[k]
+        if d.get("antenna"):
+            desc["antenna"] = d["antenna"]
+        if d.get("placement"):
+            desc["placement"] = d["placement"]
+        out.append(desc)
+    return out
+
+
+def build_batch(store, station, site=None, receivers=None):
     """Package all unsubmitted evidence into one signed envelope.
 
     Sweep bins go up as per-(receiver, freq) summaries — median/max/hits —
     never raw bins. Dwell observations go up as events. Returns the
     envelope dict, or None when there is nothing to send.
+
+    `receivers` is additive (NETWORK.md S1): rfsurvey.obs.v1 consumers ignore
+    it, and a missing descriptor is treated as unknown rather than rejecting
+    the batch. Bump the schema only once scoring requires it.
     """
     bins, obs = store.unsubmitted()
-    if not bins and not obs:
+    beacons = store.unsubmitted_beacons()
+    if not bins and not obs and not beacons:
         return None
     groups = {}
     for receiver, freq, db in bins:
@@ -47,13 +75,16 @@ def build_batch(store, station, site=None):
         "station_id": station.station_id,
         "generated_at": time.time(),
         "site": site or {},
+        "receivers": receivers or [],
         "sweep_summaries": summaries,
         "observations": observations,
+        "beacon_readings": beacons,
     }
     envelope = station.sign(batch)
     store.mark_batched(batch["batch_id"], json.dumps(envelope))
-    log.info("packaged batch %s: %d sweep summaries, %d observations",
-             batch["batch_id"], len(summaries), len(observations))
+    log.info("packaged batch %s: %d sweep summaries, %d observations, "
+             "%d beacon readings", batch["batch_id"], len(summaries),
+             len(observations), len(beacons))
     return envelope
 
 

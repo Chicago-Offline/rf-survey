@@ -1,0 +1,96 @@
+# Shared reference beacons for the Chicagoland survey network (NETWORK.md S7).
+#
+# Known-constant emitters used to calibrate observers against themselves over
+# time and against each other.  They bound HARDWARE VARIANCE -- dead dongle,
+# wet feedline, moved or detached antenna, drifting gain -- and NOT
+# propagation.  A beacon reading is never evidence about a surveyed channel.
+#
+# Rules (NETWORK.md S7):
+#   - Calibration is BAND-LOCAL.  A good 162 MHz reading says nothing about
+#     460 MHz.  Every entry declares a band; an observer is only scored
+#     against references its `antenna.bands_mhz` actually covers.  That key
+#     is USABLE RX REACH, not resonant bands -- an HT dual-band whip is a
+#     2m/70cm antenna but receives ~136-174 and hears 162.550 fine.  Entering
+#     resonant bands instead silently disables calibration for that observer.
+#   - Baselines are long-term medians over days, never single readings.
+#     A spot reading moves several dB with tropo and multipath.
+#   - An observer with no covering antenna is `no_reference` for that band.
+#     It is NEVER scored as healthy by omission.
+
+schema: rfsurvey.references.v1
+region: chicagoland
+updated: 2026-09-27
+
+references:
+  - id: nws-kwo39
+    name: NWS Chicago KWO39
+    freq_hz: 162550000
+    band: vhf-high
+    kind: continuous
+    expect: strong
+    modulation: nfm
+    bandwidth_hz: 16000
+    source: https://preview.weather.gov/lot/KWO39
+    notes: >
+      NOAA Weather Radio, 300 W from Willis Tower, continuous voice loop at
+      constant ERP, ~40 mi nominal range.  Primary VHF-high reference: always
+      on, never moves, never changes power.  This is the one to use for the
+      co-sited observer comparison that sets the drift threshold N.
+
+  - id: ord-datis
+    name: O'Hare D-ATIS (KORD)
+    freq_hz: 135400000
+    band: airband
+    kind: continuous
+    expect: strong
+    modulation: am
+    bandwidth_hz: 8000
+    source: https://ourairports.com/airports/KORD/frequencies.html
+    notes: >
+      Continuous AM information loop -- effectively a constant carrier with
+      voice modulation.  Secondary anchor below the 2 m band.  AM: measure
+      channel power, do not expect FM deviation.
+
+  - id: fm-wbez-915
+    name: WBEZ 91.5
+    freq_hz: 91500000
+    band: fm-broadcast
+    kind: broadcast
+    expect: very_strong
+    modulation: wfm
+    bandwidth_hz: 200000
+    notes: >
+      Gross sanity check only.  Broadcast FM is a blowtorch: it confirms the
+      dongle and feedline are alive, but it will read strong through a badly
+      mismatched antenna and can overload a front end at high gain.  Never
+      treat a healthy FM reading as evidence that VHF-high or UHF is working.
+
+  - id: fm-wxrt-931
+    name: WXRT 93.1
+    freq_hz: 93100000
+    band: fm-broadcast
+    kind: broadcast
+    expect: very_strong
+    modulation: wfm
+    bandwidth_hz: 200000
+    notes: Second FM anchor; same caveats as WBEZ.
+
+# ---------------------------------------------------------------------------
+# UHF (ATSC pilot tones) -- NOT YET POPULATED.  See NETWORK.md S7.
+#
+# The UHF land-mobile band (450-470 MHz) is the one we most need calibrated,
+# and it currently has NO usable reference:
+#
+#   1. No antenna.  Both bench observers run HT dual-band whips that top out
+#      around 450 MHz.  Until something reaches past 450, UHF observers are
+#      correctly reported as `no_reference`, not healthy.
+#   2. No verified entries.  ATSC 1.0 puts a pilot 0.309441 MHz above the
+#      lower edge of its RF channel; for channels 14-36 the lower edge is
+#      470 + (N - 14) * 6 MHz.  Chicago's post-repack channel assignments
+#      have NOT been verified here, and guessed frequencies would poison
+#      every baseline computed against them.
+#
+# Populate only from a verified source (FCC facility record or a confirmed
+# local scan), one entry per RF channel, with `source:` filled in.
+# ---------------------------------------------------------------------------
+uhf_references: []

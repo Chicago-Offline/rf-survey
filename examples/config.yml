@@ -21,10 +21,47 @@ station:                # network submission (NETWORK.md; survey station-init)
     token_file: ~/.config/rf-survey/mqtt.token
     topic_prefix: rfsurvey
 
-devices:                # keyed by EEPROM serial
+# Observers, keyed by EEPROM serial (NETWORK.md S1).
+#
+# An observer is (station_id, receiver): one SDR plus the antenna and
+# placement actually attached to it. This — not the station — is the unit
+# that gets calibrated, scored and displayed, because two dongles on one
+# host can have very different antennas, gains and front ends.
+#
+# antenna.bands_mhz is load-bearing, not documentation: it decides which
+# beacon references this observer may be scored against (S7). Leave it out
+# and readings are still recorded, but marked 'unverified' and excluded
+# from any score — never assumed healthy.
+#
+# bands_mhz means USABLE RX REACH, not the resonant/design bands. An HT
+# dual-band whip is a 2m/70cm antenna but is spec'd to receive 136-174 and
+# 400-520 — it hears NOAA 162.550 fine. Entering [[144,148],[430,450]]
+# here marks every reference out of range and silently disables
+# calibration for this observer. When in doubt use the receive spec.
+devices:
   BENCH:
     role: digital       # R820T2 — sensitivity-critical DMR dwell
-    gain: 49.6
+    gain: 49.6          # pin the gain: AGC makes absolute dB incomparable
+    antenna:
+      model: "HT dual-band whip (2m/70cm)"
+      type: omni        # omni | discone | yagi | vertical
+      gain_dbi: 2.15
+      # usable RX reach (whip receive spec), not the 2m/70cm resonant bands.
+      # Widen the low edge to ~135 if you want the airband ATIS reference;
+      # it works off-spec but is a real signal.
+      bands_mhz: [[136, 174], [400, 470]]
+    placement:
+      location: "bench, indoor"
+      height_m: 1.1
+      notes: "no ground plane"
   SONDE:
     role: analog        # E4000 — strong-signal FM work
     gain: 42
+    antenna:
+      model: "HT dual-band whip (2m/70cm)"
+      type: omni
+      gain_dbi: 2.15
+      bands_mhz: [[136, 174], [400, 470]]
+    placement:
+      location: "windowsill, S-facing"
+      height_m: 1.4
