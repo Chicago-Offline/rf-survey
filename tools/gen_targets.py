@@ -32,9 +32,19 @@ Conventions that matter, and why:
   Treating it as "unknown" would silently drop a verifiable fact; treating
   absence-of-both as "CSQ" would manufacture conflicts on every record
   whose tone simply was never researched.
+
+* --max-distance-mi fences targets to what an observer could plausibly
+  hear.  This is not an optimisation, it is a correctness fix: a Chicago
+  dongle pointed at a Green Bay repeater reads heard=0 forever, which is
+  indistinguishable from a dead local machine and would publish a false
+  "never heard" finding.  Out-of-range records stay in ssrf-lite; they
+  just do not become targets.  A location with no coordinates is KEPT and
+  reported, never silently dropped -- unknown distance is not evidence of
+  being far away, and dropping it would hide a real catalog record.
 """
 import argparse
 import glob
+import math
 import os
 import sys
 
@@ -49,8 +59,41 @@ DECODER_BY_MODE = {
 }
 
 
-def targets_from_doc(doc, priority, want_usage=("repeater",)):
+def haversine_mi(lat1, lon1, lat2, lon2):
+    """Great-circle miles. Flat-radius fencing only needs this much."""
+    r = 3958.7613
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def site_coords(doc):
+    """station_id -> (lat, lon), via stations[].location_id."""
+    locs = {}
+    for L in doc.get("locations") or []:
+        lat = L.get("lat", L.get("latitude"))
+        lon = L.get("lon", L.get("longitude"))
+        if lat is not None and lon is not None:
+            locs[L["id"]] = (float(lat), float(lon))
+    out = {}
+    for s in doc.get("stations") or []:
+        c = locs.get(s.get("location_id"))
+        if c:
+            out[s["id"]] = c
+    return out
+
+
+def in_bands(freq, bands):
+    return not bands or any(lo <= freq <= hi for lo, hi in bands)
+
+
+def targets_from_doc(doc, priority, want_usage=("repeater",), origin=None,
+                     max_mi=None, bands=()):
     chains = {c["id"]: c for c in doc.get("rf_chains") or []}
+    coords = site_coords(doc)
     out, skipped = [], []
     for a in doc.get("assignments") or []:
         chain = chains.get(a.get("rf_chain_id"))
@@ -67,6 +110,22 @@ def targets_from_doc(doc, priority, want_usage=("repeater",)):
         if not freq:
             skipped.append((a.get("id"), "no freq_mhz"))
             continue
+        if not in_bands(float(freq), bands):
+            skipped.append((a.get("id"), f"band {freq}"))
+            continue
+        if origin and max_mi:
+            c = coords.get(chain.get("station_id"))
+            if c is None:
+                # Unknown distance is not evidence of distance. Keep it,
+                # but say so -- a silently dropped local repeater is a
+                # worse failure than one extra target to check.
+                skipped.append((a.get("id"), "NO COORDS (kept)"))
+            else:
+                d = haversine_mi(origin[0], origin[1], c[0], c[1])
+                if d > max_mi:
+                    skipped.append(
+                        (a.get("id"), f"{d:.0f} mi > {max_mi:.0f}"))
+                    continue
         mode = chain.get("mode") or {}
         mtype = (mode.get("type") or "").upper()
         decoder = DECODER_BY_MODE.get(mtype)
@@ -114,6 +173,12 @@ def main(argv=None):
     ap.add_argument("--priority", type=int, default=2)
     ap.add_argument("--usage", default="repeater",
                     help="comma-separated assignment usages, or 'any'")
+    ap.add_argument("--origin", metavar="LAT,LON",
+                    help="observer position for --max-distance-mi")
+    ap.add_argument("--max-distance-mi", type=float,
+                    help="drop targets whose site is farther than this")
+    ap.add_argument("--band", action="append", metavar="LO-HI",
+                    help="MHz range to keep, repeatable (e.g. 144-148)")
     ap.add_argument("-o", "--out", help="write here instead of stdout")
     args = ap.parse_args(argv)
 
@@ -122,6 +187,26 @@ def main(argv=None):
         ap.error(f"ssrf-lite checkout not found: {root}")
     usage = None if args.usage == "any" else tuple(
         u.strip() for u in args.usage.split(",") if u.strip())
+
+    origin = None
+    if args.origin:
+        try:
+            lat, lon = (float(x) for x in args.origin.split(","))
+        except ValueError:
+            ap.error("--origin must be LAT,LON")
+        origin = (lat, lon)
+    # Fail loudly rather than silently monitoring the whole midwest: a
+    # radius with no origin is a fence that is not actually there.
+    if args.max_distance_mi and not origin:
+        ap.error("--max-distance-mi requires --origin")
+
+    bands = []
+    for b in args.band or []:
+        try:
+            lo, hi = (float(x) for x in b.split("-"))
+        except ValueError:
+            ap.error(f"--band must be LO-HI, got {b!r}")
+        bands.append((lo, hi))
 
     targets, skipped, files = [], [], []
     for pat in args.include:
@@ -132,7 +217,9 @@ def main(argv=None):
     for path in files:
         with open(path) as fh:
             doc = yaml.safe_load(fh) or {}
-        t, s = targets_from_doc(doc, args.priority, usage)
+        t, s = targets_from_doc(doc, args.priority, usage, origin=origin,
+                                max_mi=args.max_distance_mi,
+                                bands=tuple(bands))
         targets += t
         skipped += [(os.path.relpath(path, root), *row) for row in s]
 
@@ -150,8 +237,16 @@ def main(argv=None):
 
     doc = yaml.safe_dump({"targets": dedup}, sort_keys=False,
                          default_flow_style=False, allow_unicode=True)
+    fence = ""
+    if args.max_distance_mi:
+        fence = (f"# Fenced to {args.max_distance_mi:.0f} mi of "
+                 f"{args.origin}.\n")
+    if bands:
+        fence += "# Bands: " + ", ".join(
+            f"{lo:g}-{hi:g} MHz" for lo, hi in bands) + "\n"
     header = (f"# GENERATED by tools/gen_targets.py from ssrf-lite\n"
               f"# {len(dedup)} target(s) from {len(files)} record file(s).\n"
+              + fence +
               f"# Do not hand-edit; re-run the generator.  Pin local\n"
               f"# hypotheses in the plan's inline monitor.targets instead.\n")
     out = header + doc
