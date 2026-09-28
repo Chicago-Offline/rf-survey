@@ -114,6 +114,21 @@ Topics:
   (median/max/hit-count over the batch window), never raw bins — the
   ElectroSense lesson (~100× bandwidth cut via PSD averaging). Dwell/decode
   observations go up as events.
+- **Monitor checks are the exception to "aggregate before publish"**: the
+  batch `monitor_checks` block (additive to `rfsurvey.obs.v1`) carries
+  individual target checks, **including the silent ones** (`heard: false`),
+  which are the majority. They are not rolled up station-side for two
+  reasons. (1) Silence is the evidence: without the checks that heard
+  nothing, the aggregator cannot distinguish a quiet channel from one no
+  observer ever visited, so "last heard" and "never observed" stay
+  unanswerable. (2) A station-side rollup destroys the cross-observer view
+  — which observers heard a channel, and whether two receivers corroborate
+  a parameter, can only be computed once checks from several stations sit in
+  the same place. Volume is bounded by the target list (tens of channels ×
+  a per-target `interval_s`), not by spectrum width, so this stays cheap.
+  Each check carries `target` + `ssrf_id` (the catalog join key) and the
+  per-parameter grades, none of which survive the generic `observations`
+  path.
 - `rfsurvey/status/<station_id>` — heartbeat: uptime, receivers claimed,
   scan plan hash, last obs ts (retained)
 - `rfsurvey/cmd/<station_id>` — reserved for later (plan updates); OFF by
@@ -133,6 +148,13 @@ Small service (dev EC2 first, prod later):
   sqlite+litestream to start)
 - maintains derived tables: per-channel × per-observer duty cycle, last
   heard, decode metadata (CC/TG/NAC/radio IDs), verification tier
+- ingests the batch `monitor_checks` block into a `monitor_checks` table
+  keyed `(station_id, receiver, freq_hz, target, ts)`, and derives the
+  network-wide equivalents of the station-local `Store.monitor_status()`
+  and `Store.param_state()` rollups. The station versions are
+  per-receiver by construction; the directory needs them merged across
+  observers, and `corroborated` (≥2 distinct receivers) is only meaningful
+  at this layer.
 - maintains a per-**observer** `(station_id, receiver)` **reliability score**
   (SatNOGS-style): beacon baseline health, heartbeat regularity, evidence
   contradiction rate. Evidence from a degraded observer is down-weighted in
@@ -162,7 +184,32 @@ Promotion / flagging rules (aggregator policy, tunable):
 - `verified`: ≥ V1 from ≥ 2 stations across ≥ 3 distinct days
 - `flagged`: decode metadata contradicts the ssrf record (wrong color
   code, unexpected talkgroups) → human review queue
-- `stale`: no V0+ at any in-range station for N days (default 90)
+- `stale`: no V0+ at any in-range station for N days (default 90).
+  This is the conservative gate for **ssrf-lite writeback** (§5) — it
+  decides when a curated catalog record gets flagged in git, so it stays
+  slow. It is deliberately NOT the same as the display thresholds below.
+
+### Channel status (rffeed directory display)
+
+Five states, not two. Approved 2026-09-28. A channel's status is only
+graded once it is *gradeable*, which is the whole point:
+
+| State | Meaning |
+|-------|---------|
+| `active` | heard ≤ 7 days ago |
+| `stale` | last heard 7–30 days ago |
+| `dormant` | last heard > 30 days ago |
+| `never_heard` | in plausible range, ≥ 50 checks spanning ≥ 7 days, always silent — **a real finding** |
+| `out_of_range` | no observer could plausibly hear it — not a finding, excluded from staleness |
+| `no_decoder` | mode has no decoder mapping; the question was never asked |
+
+`out_of_range` and `no_decoder` are **not** graded for staleness. Without
+that split, a catalog record for a Green Bay repeater monitored from a
+Chicago dongle reads `heard=0` forever and is indistinguishable from a dead
+local machine — which would quietly poison the directory with false
+findings. Plausibility is a **flat radius** for now (~60 mi from every
+active observer); driving it off `references.py` antenna reach is a later
+refinement, not required for the amateur milestone.
 
 **Trunked systems (P25 / DMR Cap+/Con+):** don't reinvent — a station may
 run trunk-recorder or sdrtrunk as a side decoder and submit its call

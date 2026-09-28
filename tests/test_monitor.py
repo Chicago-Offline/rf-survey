@@ -1,13 +1,22 @@
 import os, sys, tempfile, time, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from rfsurvey import config, monitor, targets as targets_mod
+from rfsurvey import config, monitor, submit as submit_mod, targets as targets_mod
 from rfsurvey.config import ConfigError
 from rfsurvey.store import Store
 from rfsurvey.location import Fix
 
 PLAN = os.path.join(os.path.dirname(__file__), "..", "plans",
                     "plan-chicago-monitor.yml")
+
+
+class _FakeStation:
+    station_id = "test-station"
+    public_key_b64 = "fake"
+
+    def sign(self, batch):
+        return {"batch": batch, "sig": "unsigned-test",
+                "station_id": self.station_id}
 
 
 def _t(name="T", freq_mhz=462.675, expect=None, **kw):
@@ -232,17 +241,55 @@ class TestMonitorStore(unittest.TestCase):
         self.assertEqual(
             rows["Forest View 650"]["params"]["ctcss_hz"]["state"], "conflict")
 
-    def test_batch_does_not_claim_monitor_checks_yet(self):
-        # build_batch() packages observations and beacons only -- ssrf-obs
-        # has no ingest path for monitor checks yet.  Claiming them here
-        # would mark them submitted without sending them, and
-        # unsubmitted_monitor_checks() filters on batch_id IS NULL, so the
-        # evidence could never be resent once the server side lands.
-        # They must stay pending until that ingest exists.
+    def test_batch_sends_monitor_checks_then_claims_them(self):
+        # Stamping a batch_id on monitor_checks is only safe BECAUSE the
+        # batch now carries them, so both halves are asserted together.
+        # If build_batch() ever stops sending them while mark_batched()
+        # keeps claiming them, the evidence is marked submitted without
+        # ever leaving the station and can never be resent
+        # (unsubmitted_monitor_checks() filters on batch_id IS NULL).
+        # That regression must fail here.
         self._chk(_t(), False, {})
         self.assertEqual(len(self.store.unsubmitted_monitor_checks()), 1)
-        self.store.mark_batched("batch-1", "{}")
-        self.assertEqual(len(self.store.unsubmitted_monitor_checks()), 1)
+        env = submit_mod.build_batch(self.store, _FakeStation())
+        sent = env["batch"]["monitor_checks"]
+        self.assertEqual(len(sent), 1, "silent check must be SENT, not just claimed")
+        self.assertFalse(sent[0]["heard"])
+        self.assertEqual(len(self.store.unsubmitted_monitor_checks()), 0)
+        # ...and not sent twice.
+        self.assertIsNone(submit_mod.build_batch(self.store, _FakeStation()))
+
+    def test_silent_only_station_still_produces_a_batch(self):
+        # A station whose targets are all quiet has nothing in
+        # observations/beacons.  It must still submit: "we looked at 38
+        # Chicago repeaters and heard nothing" is the evidence that
+        # separates stale from never-visited.  Before monitor_checks were
+        # batched this returned None and the station stayed silent.
+        self._chk(_t(name="Quiet A"), False, {})
+        self._chk(_t(name="Quiet B", freq_mhz=462.7), False, {})
+        env = submit_mod.build_batch(self.store, _FakeStation())
+        self.assertIsNotNone(env)
+        b = env["batch"]
+        self.assertEqual(b["observations"], [])
+        self.assertEqual(len(b["monitor_checks"]), 2)
+
+    def test_batched_check_preserves_catalog_join_and_grades(self):
+        # The add_observation side effect loses target name, ssrf_id and
+        # the param grades, so a heard channel arriving only as a generic
+        # observation cannot be tied back to its ssrf-lite record.
+        tgt = _t(name="NS9RC 145.470", freq_mhz=145.47,
+                 expect={"ctcss_hz": 107.2}, ssrf_id="ns9rc:145470")
+        self._chk(tgt, True, {"active": 1, "audio_bytes": 9,
+                              "ctcss_hz": 107.2})
+        sent = submit_mod.build_batch(
+            self.store, _FakeStation())["batch"]["monitor_checks"][0]
+        self.assertEqual(sent["target"], "NS9RC 145.470")
+        self.assertEqual(sent["ssrf_id"], "ns9rc:145470")
+        self.assertEqual(sent["freq_hz"], 145_470_000)
+        self.assertTrue(sent["heard"])
+        self.assertEqual(sent["receiver"], self.rx)
+        self.assertIsInstance(sent["params"], dict)
+        self.assertIsInstance(sent["meta"], dict)
 
 
 class TestScheduler(unittest.TestCase):

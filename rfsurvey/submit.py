@@ -47,13 +47,24 @@ def build_batch(store, station, site=None, receivers=None):
     never raw bins. Dwell observations go up as events. Returns the
     envelope dict, or None when there is nothing to send.
 
-    `receivers` is additive (NETWORK.md S1): rfsurvey.obs.v1 consumers ignore
-    it, and a missing descriptor is treated as unknown rather than rejecting
-    the batch. Bump the schema only once scoring requires it.
+    `receivers` and `monitor_checks` are additive (NETWORK.md S1):
+    rfsurvey.obs.v1 consumers ignore them, and a missing descriptor is
+    treated as unknown rather than rejecting the batch. Bump the schema only
+    once scoring requires it.
+
+    Monitor checks go up as individual checks, NOT as a rollup, and the
+    silent ones (heard=0) go up too. They are the majority and they are the
+    evidence: without them the aggregator cannot tell a quiet channel from
+    one no observer ever visited, so "last heard" and "never observed" stay
+    unanswerable network-side. Rolling up station-side would also destroy
+    the cross-observer view -- who heard it, and whether two receivers
+    corroborate a parameter, can only be computed once checks from several
+    stations sit in the same place.
     """
     bins, obs = store.unsubmitted()
     beacons = store.unsubmitted_beacons()
-    if not bins and not obs and not beacons:
+    checks = store.unsubmitted_monitor_checks()
+    if not bins and not obs and not beacons and not checks:
         return None
     groups = {}
     for receiver, freq, db in bins:
@@ -69,6 +80,16 @@ def build_batch(store, station, site=None, receivers=None):
          "gated": bool(o[7]), "meta": json.loads(o[8] or "{}"),
          "lat": o[9], "lon": o[10], "alt_m": o[11], "fix": o[12]}
         for o in obs]
+    monitor_checks = [
+        {"id": c["id"], "ts": c["ts"], "receiver": c["receiver"],
+         "target": c["target"], "ssrf_id": c["ssrf_id"],
+         "freq_hz": c["freq_hz"], "decoder": c["decoder"],
+         "heard": bool(c["heard"]), "snr_db": c["snr_db"],
+         "params": json.loads(c["params"] or "{}"),
+         "meta": json.loads(c["meta"] or "{}"),
+         "lat": c["lat"], "lon": c["lon"], "alt_m": c["alt_m"],
+         "fix": c["fix"]}
+        for c in checks]
     batch = {
         "schema": SCHEMA_ID,
         "batch_id": str(uuid.uuid4()),
@@ -79,12 +100,16 @@ def build_batch(store, station, site=None, receivers=None):
         "sweep_summaries": summaries,
         "observations": observations,
         "beacon_readings": beacons,
+        "monitor_checks": monitor_checks,
     }
     envelope = station.sign(batch)
     store.mark_batched(batch["batch_id"], json.dumps(envelope))
+    heard = sum(1 for c in monitor_checks if c["heard"])
     log.info("packaged batch %s: %d sweep summaries, %d observations, "
-             "%d beacon readings", batch["batch_id"], len(summaries),
-             len(observations), len(beacons))
+             "%d beacon readings, %d monitor checks (%d heard, %d silent)",
+             batch["batch_id"], len(summaries), len(observations),
+             len(beacons), len(monitor_checks), heard,
+             len(monitor_checks) - heard)
     return envelope
 
 

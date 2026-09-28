@@ -306,14 +306,17 @@ class Store:
         self.db.execute(
             "UPDATE beacon_readings SET batch_id=? WHERE batch_id IS NULL",
             (batch_id,))
-        # NOT claiming monitor_checks here, deliberately.  build_batch()
-        # packages unsubmitted() + unsubmitted_beacons() only, so ssrf-obs
-        # has no ingest path for monitor checks yet.  Stamping a batch_id
-        # on them would mark them submitted without ever sending them, and
-        # unsubmitted_monitor_checks() filters on batch_id IS NULL, so the
-        # evidence could never be resent once the server side lands.
-        # Leave them pending; they accumulate locally and sync when the
-        # ssrf-obs ingest for them exists.
+        # monitor_checks ARE claimed now: build_batch() packages them into
+        # the batch `monitor_checks` block, so stamping them here is what
+        # keeps them from being sent twice.  This was deliberately omitted
+        # until the batch carried them -- stamping a batch_id on rows that
+        # never left the station would have marked them submitted forever
+        # (unsubmitted_monitor_checks() filters on batch_id IS NULL, so the
+        # evidence could never have been resent).  Both halves must stay in
+        # sync: if build_batch() ever stops sending them, unstamp them here.
+        self.db.execute(
+            "UPDATE monitor_checks SET batch_id=? WHERE batch_id IS NULL",
+            (batch_id,))
         self.db.execute(
             "INSERT INTO batches(id,created,acked,payload) VALUES(?,?,0,?)",
             (batch_id, time.time(), envelope_json))
