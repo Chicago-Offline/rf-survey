@@ -1,6 +1,6 @@
 # rf-survey
 
-**🌐 [Project site](https://chicago-offline.github.io/rf-survey/)**
+**🌐 [Project site](https://rfsurvey.chicagooffline.com/)**
 
 An SDR-based RF landscape surveying tool. Plug in one or more SDRs, set your
 location (manually or from GPS), and scan. Output is structured evidence good
