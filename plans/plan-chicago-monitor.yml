@@ -1,0 +1,83 @@
+# Chicago monitoring + discovery seed plan (milestone 1).
+#
+# Two missions in one plan, deliberately:
+#   monitor:  go and check channels we already believe in, on a schedule,
+#             whether or not the sweep sees energy there.  This is what
+#             makes "last heard" and "parameters verified" answerable.
+#   bands:    keep exploring the same spectrum for things we do not know
+#             about yet.
+#
+# Monitoring takes duty_pct of each pass's airtime and hands the radio
+# back; it never starves discovery.  A silent target costs ~5 s (energy
+# gate only) and still writes a "checked, nothing there" row, which is the
+# whole point -- without that row a quiet repeater is indistinguishable
+# from one nobody ever looked at.
+name: chicago-monitor-seed
+
+sweep:
+  integration_s: 10
+  passes: 0                 # run forever
+  channel_raster_hz: 6250   # UHF narrowband grid
+
+dwell:
+  snr_db: 12.0
+  min_hits: 3
+  duration_s: 60
+  decoder: nfm
+  squelch_db: 6.0
+
+monitor:
+  interval_s: 900           # revisit each target at least every 15 min
+  duration_s: 20            # decode dwell once the gate opens
+  squelch_db: 6.0
+  decoder: nfm
+  duty_pct: 30              # share of each pass spent on known channels
+
+  # Generated from ssrf-lite by tools/gen_targets.py -- the catalog is the
+  # source of truth for what we expect, so these are regenerated rather
+  # than hand-maintained.  Paths are relative to this plan file.
+  targets_file:
+    - targets-nsea-gmrs.yml     # 4 NSEA GMRS repeaters, priority 1
+    - targets-ham-local.yml     # 19 local ham repeaters, priority 2
+
+  # Hand-pinned local hypotheses: things we believe from direct knowledge
+  # that the catalog does not yet agree with.  Keep these few and
+  # annotated -- each one is a question for the catalog.
+  targets:
+    # Eric's own GMRS repeater.  He reports 462.550 with DPL 023 (DCS),
+    # but ssrf-lite's nearest record on this frequency
+    # (asgn_gmrs_chicago_550 "Chicago 550", from a RadioReference listing
+    # with no published callsign) claims CTCSS 156.7 instead.  Those
+    # cannot both be right, and it is not yet established whether that
+    # record even describes this machine.  So this target carries the
+    # owner-reported parameters and NO ssrf_id: it is evidence to resolve
+    # the question with, not an assertion that the record is his.
+    #
+    # NOTE: detect_dcs reports DCS *presence* only -- the 23,12 Golay code
+    # decode is not implemented -- so this will read "DCS present, code
+    # decode not implemented" (unverified) rather than confirming 023.
+    # Presence alone still contradicts a CTCSS claim, which is the point.
+    - name: "Eric 550 (WRXC682)"
+      freq_mhz: 462.550
+      ssrf_id: null
+      priority: 1
+      decoder: nfm
+      expect:
+        mode: FM
+        dcs_code: "023"
+
+# Discovery: keep sweeping the GMRS/business UHF region the targets live
+# in, so unknown activity next door to a known channel still gets found.
+bands:
+  - start_mhz: 462.5
+    stop_mhz: 467.8
+    step_khz: 6.25
+    channel_raster_hz: 6250
+  - start_mhz: 144.0
+    stop_mhz: 148.0
+    step_khz: 2.5
+    channel_raster_hz: 2500   # 2m sits on a 2.5 kHz grid, not 6.25
+  - start_mhz: 442.0
+    stop_mhz: 448.0
+    step_khz: 2.5
+    channel_raster_hz: 2500
