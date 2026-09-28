@@ -27,19 +27,67 @@ real confidence: these channels were actually heard, recently, near you.
                      └───────────────────────┘
 ```
 
-## 1. Station identity
+## 1. Station identity and observers
 
-Each instance gains a station config on top of the existing receiver/site
-config:
+Two levels, deliberately separated (amended 2026-09-27):
+
+- **Station** — the trust anchor. One rf-survey install, one `station_id`,
+  one Ed25519 keypair, one MQTT credential.
+- **Observer** — `(station_id, receiver_serial)`. One SDR together with the
+  antenna and placement it is actually attached to. This is the unit that
+  gets measured, calibrated, scored and displayed.
+
+Per-SDR keypairs were considered and rejected: dongles sharing a host are not
+independently trustworthy, and it doubles enrollment for no security gain.
+Signing stays at the station.
+
+Station config:
 
 - `station_id` — short stable name (`bowmanville`, `12vpi-mobile`)
 - Ed25519 keypair — signs every submission batch; aggregator holds the
   registry of public keys (enrollment is manual, small trusted set)
-- site: lat/lon/elev, antenna description, fixed vs mobile
-- receivers: serials + calibration offsets (already in rf-survey config)
+- site: lat/lon/elev, fixed vs mobile
+
+Observer config — one entry per receiver under `devices:`, keyed by EEPROM
+serial. `role`, `gain` and `floor_offset_db` already exist; `antenna` and
+`placement` are the addition:
+
+```yaml
+devices:
+  BENCH:
+    role: digital           # R820T2 — sensitivity-critical DMR dwell
+    gain: 49.6
+    antenna:
+      model: "HT dual-band whip (2m/70cm)"
+      type: omni            # omni | discone | yagi | vertical
+      gain_dbi: 2.15
+      bands_mhz: [[144, 148], [430, 450]]   # where this antenna is real
+    placement:
+      location: "bench, indoor"
+      height_m: 1.1
+      notes: "no ground plane"
+```
+
+`antenna.bands_mhz` is load-bearing, not documentation: the aggregator uses
+it to decide which beacon references an observer may legitimately be scored
+against (§7). An observer with no antenna coverage at a reference frequency
+is `no_reference` for that band — never scored as healthy by omission.
 
 Fixed sites report a constant position; mobile stations (12vpi) attach the
 GPS fix per observation (M3).
+
+**Wire format.** The batch gains a `receivers:` block alongside `site:`
+carrying each active observer's descriptor. This is additive:
+`rfsurvey.obs.v1` consumers ignore it, and the aggregator treats a missing
+descriptor as unknown rather than rejecting the batch. Bump to `v2` only
+when scoring starts *requiring* the descriptor.
+
+**Rollup rule.** `receiver` is already carried end to end — sweep summaries
+are keyed `(receiver, freq_hz)` and every observation row has it. Beacon
+baselines, drift alerts and reliability scores are therefore computed **per
+observer** and only rolled up to the station for display. Never average
+across observers at ingest: that smears exactly the hardware variance §7
+exists to detect.
 
 ## 2. Transport: MQTT
 
@@ -74,12 +122,17 @@ Small service (dev EC2 first, prod later):
   registry, rejects unknown/invalid
 - dedupes by batch UUID, appends to central observations DB (Postgres, or
   sqlite+litestream to start)
-- maintains derived tables: per-channel × per-station duty cycle, last
+- maintains derived tables: per-channel × per-observer duty cycle, last
   heard, decode metadata (CC/TG/NAC/radio IDs), verification tier
-- maintains a per-station **reliability score** (SatNOGS-style): beacon
-  baseline health, heartbeat regularity, evidence contradiction rate.
-  Evidence from a degraded station is down-weighted in promotion rules
-  until the station recovers.
+- maintains a per-**observer** `(station_id, receiver)` **reliability score**
+  (SatNOGS-style): beacon baseline health, heartbeat regularity, evidence
+  contradiction rate. Evidence from a degraded observer is down-weighted in
+  promotion rules until it recovers; a station's displayed score is a
+  rollup of its observers, never the unit of computation (§1).
+- keys observer descriptors (antenna, placement) in a `receivers` table on
+  `(station_id, receiver)`, updated from the batch `receivers:` block; needs
+  an `observations(station_id, receiver)` index alongside the existing
+  `obs_station`
 
 The obs DB is **append-only evidence, deliberately outside ssrf-lite** —
 the git repo stays curated and lean; hourly observations don't churn it.
@@ -150,9 +203,9 @@ reference list on schedule; the aggregator tracks long-term baselines.
 
 What it gives:
 
-- **Station health + drift detection** (the big win): a station whose median
-  on a reference drops N dB has a failed dongle, wet feedline, or moved
-  antenna — flagged automatically, no human noticing required.
+- **Observer health + drift detection** (the big win): an observer whose
+  median on a reference drops N dB has a failed dongle, wet feedline, or
+  moved antenna — flagged automatically, no human noticing required.
 - **Coarse cross-station normalization within a band**: beacon-derived
   offsets weight (never equate) receivability claims between stations.
 - **Gain sanity** after config changes.
@@ -172,11 +225,36 @@ Rules that keep it honest:
    with the measurement.
 4. Beacons bound **hardware variance, not propagation** — cross-station SNR
    on a surveyed channel is still weighted evidence, not ground truth.
+5. **Score per observer, not per station** (§1). An observer is only scored
+   against references its `antenna.bands_mhz` actually covers; everything
+   else is `no_reference`. A station with a good VHF observer and a deaf UHF
+   one must not average out to "healthy".
+
+**N is measured, not guessed.** The flag threshold above has no defensible
+value until we know the system's own noise floor. Two co-sited observers
+sharing an antenna model but differing in tuner, gain and placement give
+that directly: park both on 162.55 MHz with identical integration and log
+for several days. The spread between them, plus each one's day-to-day
+wander, is the floor — N must sit above it or the score is alarm spam.
+The current bench pair (`BENCH` R820T2 @ 49.6, `SONDE` E4000 @ 42, both on
+HT dual-band whips) is exactly this experiment and should be run before any
+threshold is committed.
+
+Secondary benefit: a known-good delta between two co-sited observers is a
+standing self-test. Months of tracking within X dB followed by divergence
+means a dongle or a connector, detectable with no external baseline at all.
+
+⚠️ **Current antenna gap**: HT dual-band whips (2m/70cm) cover the NWS
+162.55 reference acceptably and FM broadcast poorly-but-usably, but top out
+around 450 MHz — so the **ATSC 470–600 MHz reference has no working antenna
+on either bench observer**. UHF land-mobile sweeps (450–470) are running on
+an off-band antenna with no way to quantify the loss. Fix the antenna or
+mark those observers `no_reference` for UHF; do not score them as healthy.
 
 Implementation: shared `references/chicago.yml` in this repo (freq, kind,
 expected-strong/weak hints), a `beacon-check` pass type in scan plans,
-aggregator-side baselines + deviation alerts feeding the station reliability
-score.
+aggregator-side baselines + deviation alerts feeding the per-observer
+reliability score.
 
 ## Prior art (what we reused, what we avoided)
 
