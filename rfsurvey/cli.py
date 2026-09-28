@@ -64,6 +64,40 @@ def cmd_candidates(args, cfg):
     return 0
 
 
+def cmd_station_init(args, cfg):
+    from . import station as station_mod
+    st = station_mod.Station.create(args.id, args.key or station_mod.DEFAULT_KEY)
+    print(f"station_id: {st.station_id}")
+    print(f"public key (register with the aggregator): {st.public_key_b64}")
+    print("add to config.yml:\n"
+          f"station:\n  id: {st.station_id}\n"
+          f"  key: {args.key or station_mod.DEFAULT_KEY}\n"
+          "  mqtt:\n    server: wsmqtt-dev.chicagooffline.com\n"
+          "    token_file: ~/.config/rf-survey/mqtt.token")
+    return 0
+
+
+def cmd_submit(args, cfg):
+    import time as _time
+    from . import station as station_mod, submit as submit_mod
+    from .location import provider as loc_provider
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+    st = station_mod.Station.load(cfg)
+    store = Store(cfg["db"])
+    site = cfg.get("location", {})
+    while True:
+        submit_mod.build_batch(store, st, site={k: site.get(k) for k in
+                                                ("lat", "lon", "alt_m", "mode")})
+        with submit_mod.Publisher(cfg, st) as pub:
+            n = pub.publish_pending(store)
+            pub.heartbeat({"pending": len(store.pending_batches())})
+        print(f"submitted {n} batch(es)")
+        if not args.loop:
+            return 0
+        _time.sleep(args.loop)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="survey",
         description="Multi-SDR RF landscape surveying (receive-only, always)")
@@ -90,10 +124,19 @@ def main(argv=None):
     c = sub.add_parser("candidates", help="ssrf-lite candidate stubs (YAML)")
     c.add_argument("--min-gated", type=int, default=2)
 
+    si = sub.add_parser("station-init", help="create this station's keypair")
+    si.add_argument("--id", required=True, help="stable station id (e.g. bowmanville)")
+    si.add_argument("--key", help="private key path (default ~/.config/rf-survey/station.key)")
+
+    sm = sub.add_parser("submit", help="package + publish evidence over MQTT")
+    sm.add_argument("--loop", type=int, default=0, metavar="SECONDS",
+                    help="keep running, submitting every N seconds")
+
     args = p.parse_args(argv)
     cfg = config.load_config(args.config)
     return {"devices": cmd_devices, "run": cmd_run, "release": cmd_release,
-            "report": cmd_report, "candidates": cmd_candidates}[args.cmd](args, cfg)
+            "report": cmd_report, "candidates": cmd_candidates,
+            "station-init": cmd_station_init, "submit": cmd_submit}[args.cmd](args, cfg)
 
 
 if __name__ == "__main__":
