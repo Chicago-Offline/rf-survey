@@ -286,12 +286,16 @@ class TestPlanMonitorBlock(unittest.TestCase):
         mon = plan["monitor"]
         self.assertTrue(mon["resolved"])
         names = {t["name"]: t for t in mon["resolved"]}
-        # Eric's repeater: owner-reported DCS, deliberately no ssrf_id
-        # because it is not established that the catalog's 462.550 record
-        # describes this machine.
-        eric = names["Eric 550 (WRXC682)"]
-        self.assertEqual(eric["expect"]["dcs_code"], "023")
-        self.assertIsNone(eric["ssrf_id"])
+        # The 462.550 repeater is a real overlay record (chioff-ssrf-shared),
+        # not a hand-pinned guess: it carries an ssrf_id so evidence can be
+        # written back against it.  ssrf-lite CORE disagrees on this
+        # frequency (CTCSS 156.7 vs DCS 023) and that conflict is
+        # deliberately left for monitoring to settle.
+        chio = names["ChiO REPEATER"]
+        self.assertEqual(chio["ssrf_id"], "asg_chio_repeater")
+        self.assertEqual(chio["expect"]["dcs_code"], "023")
+        self.assertEqual(chio["expect"]["dcs_polarity"], "N")
+        self.assertNotIn("ctcss_hz", chio["expect"])
         # Catalog-derived NSEA target keeps its ssrf_id for writeback.
         self.assertEqual(names["NSEA 675"]["ssrf_id"], "asgn_nsea_675")
         self.assertEqual(names["NSEA 675"]["expect"]["ctcss_hz"], 141.3)

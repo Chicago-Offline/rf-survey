@@ -39,32 +39,36 @@ monitor:
   targets_file:
     - targets-nsea-gmrs.yml     # 4 NSEA GMRS repeaters, priority 1
     - targets-ham-local.yml     # 19 local ham repeaters, priority 2
+    - targets-chioff-overlay.yml  # ChiO REPEATER 462.550, priority 1
 
-  # Hand-pinned local hypotheses: things we believe from direct knowledge
-  # that the catalog does not yet agree with.  Keep these few and
-  # annotated -- each one is a question for the catalog.
-  targets:
-    # Eric's own GMRS repeater.  He reports 462.550 with DPL 023 (DCS),
-    # but ssrf-lite's nearest record on this frequency
-    # (asgn_gmrs_chicago_550 "Chicago 550", from a RadioReference listing
-    # with no published callsign) claims CTCSS 156.7 instead.  Those
-    # cannot both be right, and it is not yet established whether that
-    # record even describes this machine.  So this target carries the
-    # owner-reported parameters and NO ssrf_id: it is evidence to resolve
-    # the question with, not an assertion that the record is his.
-    #
-    # NOTE: detect_dcs reports DCS *presence* only -- the 23,12 Golay code
-    # decode is not implemented -- so this will read "DCS present, code
-    # decode not implemented" (unverified) rather than confirming 023.
-    # Presence alone still contradicts a CTCSS claim, which is the point.
-    - name: "Eric 550 (WRXC682)"
-      freq_mhz: 462.550
-      ssrf_id: null
-      priority: 1
-      decoder: nfm
-      expect:
-        mode: FM
-        dcs_code: "023"
+  # No hand-pinned targets right now, and that is the desired state: a
+  # hand-pinned target is a belief with no catalog record behind it, so
+  # each one is really a gap in ssrf-lite.  Add them here only while that
+  # gap is open, and delete them once the record exists.
+  #
+  # 🔴 OPEN CONFLICT on 462.550, deliberately NOT resolved here.
+  # The overlays and ssrf-lite core disagree about this frequency:
+  #
+  #   asg_chio_repeater   "ChiO REPEATER"  chioff-ssrf-shared
+  #                       462.550/467.550, DCS 023 polarity N, 20K0F3E
+  #   asg_priv_fam_repeater "FAM REPEATER" muehlstein-ssrf-private
+  #                       462.550/467.550, DCS 023, 11K2F3E bw 25
+  #   asgn_gmrs_chicago_550 "Chicago 550"  ssrf-lite core
+  #                       462.5500/467.5500, CTCSS 156.7, no callsign,
+  #                       sourced from a RadioReference listing
+  #
+  # Two overlays independently say DCS 023, so the core record is the
+  # outlier -- but it is NOT established whether it describes this same
+  # machine (stale/wrong tone) or a genuinely different system sharing
+  # the channel.  Monitoring is what settles it: a DCS carrier here
+  # contradicts the 156.7 claim regardless of which code it turns out to
+  # be.  We track the overlay record and let the evidence decide.
+  #
+  # NOTE: detect_dcs reports DCS *presence* only -- the 23,12 Golay decode
+  # is not implemented -- so dcs_code and dcs_polarity will read
+  # "unverified" with "DCS present, code decode not implemented" rather
+  # than confirming 023/N. Presence alone still contradicts CTCSS 156.7,
+  # which is the immediate value.
 
 # Discovery: keep sweeping the GMRS/business UHF region the targets live
 # in, so unknown activity next door to a known channel still gets found.

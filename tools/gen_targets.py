@@ -83,6 +83,13 @@ def targets_from_doc(doc, priority, want_usage=("repeater",)):
             expect["ctcss_hz"] = None          # claimed CSQ on the output
         if "dcs_rx_code" in mode and mode["dcs_rx_code"] is not None:
             expect["dcs_code"] = str(mode["dcs_rx_code"]).zfill(3)
+            # Polarity is part of the claim where the catalog states it.
+            # Nothing can verify it yet (detect_dcs does not decode the
+            # word at all), but recording the expectation now means the
+            # grade flips on its own once Golay decode lands, rather than
+            # needing every target regenerated.
+            if mode.get("dcs_rx_polarity"):
+                expect["dcs_polarity"] = str(mode["dcs_rx_polarity"])
         if mode.get("color_code") is not None:
             expect["color_code"] = int(mode["color_code"])
 
