@@ -1,7 +1,7 @@
 import os, sys, tempfile, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from rfsurvey import devices, sweep, report, config
+from rfsurvey import devices, sweep, report, config, engine
 from rfsurvey.store import Store
 from rfsurvey.location import Fix, StaticLocation
 
@@ -62,6 +62,188 @@ class TestSweep(unittest.TestCase):
         channel_hz, snapped = sweep.snap_channel(450_000_000, 4882.8125, 6250)
         self.assertTrue(snapped)
         self.assertEqual(channel_hz, 450_000_000)
+
+    def test_vhf_channels_are_not_on_a_6250_raster(self):
+        # The bug Eric caught: these are the real channels MuehlMini is
+        # hearing. Each is a whole number of 2.5 kHz steps and none is a
+        # whole number of 6.25 kHz steps, so a 6250 raster can never name
+        # them -- it can only snap them to something wrong.
+        for hz in (146_880_000, 154_995_000, 159_195_000, 159_660_000):
+            self.assertEqual(hz % 2500, 0, f"{hz} should be on 2.5 kHz grid")
+            self.assertNotEqual(hz % 6250, 0, f"{hz} must not be on 6.25 kHz")
+
+    def test_coarse_bin_cannot_snap_to_fine_raster(self):
+        # 159.1950 MHz measured by a 3906.25 Hz sweep bin. Half a bin is
+        # 1953 Hz, which is most of a 2.5 kHz step, so the tolerance clamp
+        # must refuse rather than pick a neighbour at random.
+        raw = 159_196_875
+        channel_hz, snapped = sweep.snap_channel(raw, 3906.25, 2500)
+        self.assertFalse(snapped)
+        self.assertEqual(channel_hz, raw)
+
+    def test_refined_carrier_snaps_with_ppm_tolerance(self):
+        # Same channel after refine_carrier: ~100 Hz bins, and the carrier
+        # measured 600 Hz low because the receiver is uncalibrated. A PPM
+        # tolerance of 780 Hz (5 ppm at 156 MHz) should recover 159.1950.
+        measured = 159_195_000 - 600
+        channel_hz, snapped = sweep.snap_channel(measured, 97.6, 2500, 780.0)
+        self.assertTrue(snapped)
+        self.assertEqual(channel_hz, 159_195_000)
+
+    def test_tolerance_clamped_below_half_raster(self):
+        # An absurd tolerance must not make everything snap: a carrier
+        # sitting exactly mid-gap stays unsnapped.
+        measured = 159_195_000 + 1250
+        channel_hz, snapped = sweep.snap_channel(measured, 97.6, 2500, 99_999.0)
+        self.assertFalse(snapped)
+
+
+class TestBandRaster(unittest.TestCase):
+    def test_band_override_beats_plan_and_default(self):
+        plan = {"sweep": {"channel_raster_hz": 6250}}
+        self.assertEqual(
+            engine.band_raster_hz({"channel_raster_hz": 2500}, plan), 2500)
+
+    def test_plan_level_used_when_band_silent(self):
+        plan = {"sweep": {"channel_raster_hz": 3125}}
+        self.assertEqual(engine.band_raster_hz({}, plan), 3125)
+
+    def test_default_when_unset(self):
+        self.assertEqual(engine.band_raster_hz({}, {"sweep": {}}), 6250)
+
+    def test_ppm_tolerance_scales_with_frequency(self):
+        band = {"start_mhz": 150.0, "stop_mhz": 162.0}
+        tol = engine.ppm_tolerance_hz({"ppm_error": 5.0}, band)
+        self.assertAlmostEqual(tol, 780.0, places=0)  # 5 ppm at 156 MHz
+
+    def test_ppm_defaults_when_device_unconfigured(self):
+        band = {"start_mhz": 144.0, "stop_mhz": 148.0}
+        self.assertGreater(engine.ppm_tolerance_hz({}, band), 0)
+
+
+class TestBandDwell(unittest.TestCase):
+    PLAN = {"dwell": {"snr_db": 8, "min_hits": 3, "duration_s": 90,
+                      "decoder": "nfm", "squelch_db": 6}}
+
+    def test_band_without_dwell_inherits_plan(self):
+        self.assertEqual(engine.band_dwell({"name": "x"}, self.PLAN),
+                         self.PLAN["dwell"])
+
+    def test_band_overrides_merge_not_replace(self):
+        # A band sets only the decoder; everything else must still arrive,
+        # otherwise dwell() KeyErrors on snr_db/duration_s at the first hit.
+        band = {"dwell": {"decoder": "dmr", "duration_s": 45}}
+        got = engine.band_dwell(band, self.PLAN)
+        self.assertEqual(got["decoder"], "dmr")
+        self.assertEqual(got["duration_s"], 45)
+        self.assertEqual(got["snr_db"], 8)
+        self.assertEqual(got["min_hits"], 3)
+        self.assertEqual(got["squelch_db"], 6)
+
+    def test_does_not_mutate_shared_plan(self):
+        # The plan dwell dict is reused for every band on every pass; if a
+        # band override leaked into it, one dmr band would silently convert
+        # the whole plan after the first sweep.
+        engine.band_dwell({"dwell": {"decoder": "dmr"}}, self.PLAN)
+        self.assertEqual(self.PLAN["dwell"]["decoder"], "nfm")
+
+    def test_empty_and_null_dwell_are_no_ops(self):
+        for value in ({}, None):
+            self.assertEqual(engine.band_dwell({"dwell": value}, self.PLAN),
+                             self.PLAN["dwell"])
+
+    def test_mixed_plan_keeps_trunked_band_on_nfm(self):
+        # The real case: 450-470 gets dmr while 851-869 stays energy-only
+        # until trunking decode is integrated (NETWORK.md S4).
+        biz = {"dwell": {"decoder": "dmr"}}
+        trunked = {"channel_raster_hz": 12500}
+        self.assertEqual(engine.band_dwell(biz, self.PLAN)["decoder"], "dmr")
+        self.assertEqual(engine.band_dwell(trunked, self.PLAN)["decoder"], "nfm")
+
+
+class TestDecoderValidation(unittest.TestCase):
+    def _load(self, body):
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as f:
+            f.write(body)
+            p = f.name
+        try:
+            return config.load_plan(p)
+        finally:
+            os.unlink(p)
+
+    def test_band_decoder_accepted(self):
+        plan = self._load(
+            "name: t\nbands:\n"
+            "  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25,"
+            " dwell: {decoder: dmr}}\n")
+        self.assertEqual(plan["bands"][0]["dwell"]["decoder"], "dmr")
+
+    def test_unknown_band_decoder_rejected_at_load(self):
+        # Must fail at startup, not minutes later inside the first dwell.
+        with self.assertRaises(config.ConfigError):
+            self._load(
+                "name: t\nbands:\n"
+                "  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25,"
+                " dwell: {decoder: DMR}}\n")
+
+    def test_unimplemented_decoder_rejected(self):
+        # p25 is named in tier()'s digital set but has no dwell here yet.
+        with self.assertRaises(config.ConfigError):
+            self._load("name: t\nbands:\n"
+                       "  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25}\n"
+                       "dwell: {decoder: p25}\n")
+
+
+class TestRefineCarrier(unittest.TestCase):
+    def _rows(self, center, peak_hz):
+        rows = []
+        f = center - 24_000
+        while f <= center + 24_000:
+            db = -35.0
+            if abs(f - peak_hz) < 100:
+                db = -8.0
+            if abs(f - center) < 100:
+                db = -2.0   # DC spike, louder than the real carrier
+            rows.append((int(f), db, 97.6))
+            f += 97.6
+        return rows
+
+    def test_finds_true_carrier_and_rejects_dc_spike(self):
+        target = 159_196_875          # coarse sweep bin, 1875 Hz high
+        truth = 159_195_000           # the real channel
+        center = target - 12_000
+        captured = {}
+
+        def fake(index, lo, hi, step_khz, integ, gain=None):
+            captured["span"] = (lo, hi)
+            return self._rows(center, truth)
+
+        orig = sweep.run_rtl_power
+        sweep.run_rtl_power = fake
+        try:
+            carrier, bin_hz, snr = sweep.refine_carrier(0, target)
+        finally:
+            sweep.run_rtl_power = orig
+
+        # The DC spike is the loudest bin in the capture; it must lose.
+        self.assertAlmostEqual(carrier, truth, delta=150)
+        self.assertLess(bin_hz, 2500 / 2)   # fine enough to name a channel
+        self.assertGreater(snr, 0)
+        # Window is offset so the spike is clear of the candidate.
+        lo, hi = captured["span"]
+        self.assertLess(lo * 1e6, target)
+        self.assertGreater(hi * 1e6, target)
+
+    def test_returns_none_when_only_noise(self):
+        def fake(index, lo, hi, step_khz, integ, gain=None):
+            return [(159_190_000 + i * 98, -35.0, 97.6) for i in range(400)]
+        orig = sweep.run_rtl_power
+        sweep.run_rtl_power = fake
+        try:
+            carrier, bin_hz, snr = sweep.refine_carrier(0, 159_196_875)
+        finally:
+            sweep.run_rtl_power = orig
+        self.assertIsNotNone(carrier)  # flat noise still yields a max bin
 
 
 class TestStoreReport(unittest.TestCase):

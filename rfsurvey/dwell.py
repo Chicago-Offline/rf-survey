@@ -53,9 +53,17 @@ def dwell_nfm(index, freq_hz, duration_s, gain=None):
 def dwell_dmr(index, freq_hz, duration_s, gain=None):
     """DMR dwell via dsd-fme; harvest CC / TGs / radio IDs from its log."""
     g = str(gain if gain is not None else 0)
+    # No -N here. The NCurses UI needs a TTY; under systemd there is
+    # none (Environment= is empty, so not even TERM), and dsd-fme dies
+    # with "Error opening terminal: unknown" BEFORE emitting any decode
+    # log -- silently harvesting zero CC/TG/RID. Plain stdout/stderr is
+    # exactly what the regexes below want anyway.
+    # Bandwidth field is 12 (kHz) explicitly: 2 is not a valid dsd-fme
+    # bandwidth and was being silently coerced to 12, so this is a no-op
+    # in behaviour that stops relying on that coercion.
     cmd = ["timeout", str(duration_s + 15), "dsd-fme",
-           "-i", f"rtl:{index}:{freq_hz}:{g}:0:2:0",
-           "-fs", "-o", "null", "-N"]
+           "-i", f"rtl:{index}:{freq_hz}:{g}:0:12:0",
+           "-fs", "-o", "null"]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=duration_s + 30, errors="replace")
