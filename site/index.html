@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="rf-survey is an SDR-based RF landscape surveying tool. Plug in RTL-SDRs, set a location, and scan: sweep, dwell, decode, and produce location-tagged evidence that validates and extends the SSRF-Lite radio database." />
+  <link rel="canonical" href="https://chicago-offline.github.io/rf-survey/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="rf-survey — evidence, not vibes" />
+  <meta property="og:description" content="Multi-SDR RF surveying: sweep, dwell, decode, and report location-tagged evidence into the SSRF-Lite database." />
+  <meta property="og:url" content="https://chicago-offline.github.io/rf-survey/" />
+  <meta property="og:image" content="https://chicago-offline.github.io/rf-survey/logo.svg" />
+  <meta name="twitter:card" content="summary" />
+  <title>rf-survey — SDR surveying for the SSRF-Lite database</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a class="brand" href="#top"><img src="logo.svg" alt="" /> rf-survey</a>
+      <nav>
+        <a href="#how">How it works</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#network">Network</a>
+        <a href="#ecosystem">Ecosystem</a>
+        <a href="#start">Quick start</a>
+      </nav>
+      <a class="repo-link" href="https://github.com/Chicago-Offline/rf-survey" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <div class="hero">
+      <div class="wrap">
+        <div>
+          <p class="eyebrow">Open source · Chicago Offline</p>
+          <h1>Evidence, not vibes.</h1>
+          <p class="lead">
+            rf-survey turns cheap SDRs into a disciplined RF surveying rig:
+            sweep the spectrum, dwell on activity, decode what's there, and
+            emit location-tagged evidence good enough to validate or extend
+            <a href="https://chicago-offline.github.io/ssrf-lite/" target="_blank" rel="noopener">SSRF-Lite</a>
+            — the same data that builds codeplugs.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/Chicago-Offline/rf-survey" target="_blank" rel="noopener">View on GitHub</a>
+            <a class="button" href="https://github.com/Chicago-Offline/rf-survey/blob/main/PLAN.md" target="_blank" rel="noopener">Read the plan</a>
+            <a class="button" href="https://github.com/Chicago-Offline/rf-survey/blob/main/NETWORK.md" target="_blank" rel="noopener">Network design</a>
+          </div>
+        </div>
+        <img src="logo.svg" alt="rf-survey logo: an antenna above spectrum bars" />
+      </div>
+    </div>
+
+    <section id="how">
+      <div class="wrap">
+        <h2>How it works</h2>
+        <p class="sub">
+          A declarative scan plan drives everything. Devices are claimed by
+          serial, observations land in SQLite, and every record carries where
+          and how it was heard.
+        </p>
+        <div class="pipeline">
+          <article>
+            <h3>Sweep</h3>
+            <p>Wide-band power scans via <code>rtl_power</code>. SNR is measured against each bin's own long-term median — never a raw dB number, never another receiver's floor.</p>
+          </article>
+          <article>
+            <h3>Dwell</h3>
+            <p>Channels that clear the SNR threshold get a bounded-lifetime dwell: analog FM with squelch, or digital decode via <code>dsd-fme</code>. Supervised subprocesses, verified device release.</p>
+          </article>
+          <article>
+            <h3>Decode</h3>
+            <p>Color codes, talkgroups, radio IDs — parsed into structured metadata. An energy gate decides whether a decode is trusted at all, because digital decoders happily invent sync on pure noise.</p>
+          </article>
+          <article>
+            <h3>Report</h3>
+            <p>Human summaries, CSV/JSON export, and SSRF-Lite candidate stubs with cited observations. A human reviews before anything lands in the database — one dwell is not a system.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="evidence">
+      <div class="wrap">
+        <h2>The validation ladder</h2>
+        <p class="sub">
+          Every system/channel pair earns a verification tier per station.
+          Higher tiers mean higher confidence when a codeplug gets built from
+          the data.
+        </p>
+        <div class="pipeline">
+          <article>
+            <h3>V0 · Heard</h3>
+            <p>Energy seen above the per-channel noise median, confirmed by the activity gate during a sweep.</p>
+          </article>
+          <article>
+            <h3>V1 · Decoded</h3>
+            <p>Decode metadata — color code, talkgroups, NAC — consistent with the SSRF-Lite record. Contradictions flag the record for human review.</p>
+          </article>
+          <article>
+            <h3>V2 · Voice</h3>
+            <p>Voice activity confirmed on dwell audio, not just a carrier or data bursts.</p>
+          </article>
+          <article>
+            <h3>V3 · Recorded</h3>
+            <p>An archived clip backs the observation. The strongest evidence a record can carry.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="network">
+      <div class="wrap">
+        <h2>A distributed survey network</h2>
+        <p class="sub">
+          Fixed stations around Chicagoland — plus mobile rigs — continuously
+          scanning and submitting signed observation batches over MQTT.
+        </p>
+        <div class="pipeline">
+          <article>
+            <h3>Stations</h3>
+            <p>Each install has a stable identity and an Ed25519 keypair. Enrollment is manual and small by design — a trusted set of calibrated receivers beats an open crowd of unknown ones.</p>
+          </article>
+          <article>
+            <h3>Beacon calibration</h3>
+            <p>Stations regularly measure shared reference signals — NWS 162.55, ATSC pilots, FM broadcast — to detect hardware drift and keep cross-station comparisons honest.</p>
+          </article>
+          <article>
+            <h3>Aggregation</h3>
+            <p>A central service verifies signatures, stores append-only evidence, and applies the promotion rules: verified, flagged, or stale. Policy lives in one place, not on N Raspberry Pis.</p>
+          </article>
+          <article>
+            <h3>Payoff</h3>
+            <p><a href="https://chicago-offline.github.io/codeplugger/" target="_blank" rel="noopener">codeplugger</a> can filter on verification tier and location — program only channels somebody actually heard, recently, near you.</p>
+          </article>
+        </div>
+        <p class="sub" style="margin-top:1.5rem">
+          Receive-only, always. Surveyed systems are licensed to other people.
+          Full design in <a href="https://github.com/Chicago-Offline/rf-survey/blob/main/NETWORK.md" target="_blank" rel="noopener">NETWORK.md</a>.
+        </p>
+      </div>
+    </section>
+
+    <section id="ecosystem">
+      <div class="wrap">
+        <h2>Ecosystem</h2>
+        <p class="sub">rf-survey is the measurement layer. The rest of the stack turns its evidence into working radios.</p>
+        <div class="eco">
+          <a class="card" href="https://chicago-offline.github.io/ssrf-lite/" target="_blank" rel="noopener">
+            <h3>SSRF-Lite</h3>
+            <p>Authoritative, human-readable YAML for channel plans, repeaters, stations, and talkgroups. Where survey evidence ends up.</p>
+          </a>
+          <a class="card" href="https://chicago-offline.github.io/codeplugger/" target="_blank" rel="noopener">
+            <h3>codeplugger</h3>
+            <p>Compiles SSRF data and a profile into validated codeplugs. Verification tiers from survey data raise its confidence.</p>
+          </a>
+          <a class="card" href="https://github.com/lwvmobile/dsd-fme" target="_blank" rel="noopener">
+            <h3>DSD-FME</h3>
+            <p>The digital decoder behind DMR/P25/NXDN dwell. rf-survey orchestrates and gates it; it does the demodulation.</p>
+          </a>
+          <a class="card" href="https://www.rtl-sdr.com/" target="_blank" rel="noopener">
+            <h3>RTL-SDR</h3>
+            <p>The hardware that makes a survey station cost less than a decent antenna. Enumerated by serial, claimed with verified release.</p>
+          </a>
+          <a class="card" href="https://chicagooffline.com" target="_blank" rel="noopener">
+            <h3>Chicago Offline</h3>
+            <p>Resilient, community-owned communications for Chicagoland: amateur radio, GMRS/MURS, DMR, and LoRa mesh.</p>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section id="start">
+      <div class="wrap">
+        <h2>Quick start</h2>
+        <p class="sub">Python 3.9+, <code>rtl-sdr</code> tools on the path, optional <code>dsd-fme</code> for digital dwell.</p>
+        <div class="start">
+          <div>
+            <h3>Install and list devices</h3>
+<pre><code>pip install git+https://github.com/Chicago-Offline/rf-survey
+survey devices
+<span class="c"># 0: SN=BENCH  Realtek RTL2838UHIDIR  digital</span>
+<span class="c"># 1: SN=SONDE  Realtek RTL2838UHIDIR  analog</span></code></pre>
+          </div>
+          <div>
+            <h3>Run a scan plan</h3>
+<pre><code>survey run examples/plan-uhf-dmr.yml --serial BENCH
+survey report
+survey candidates   <span class="c"># ssrf-lite stubs, cited evidence</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>rf-survey · <a href="https://github.com/Chicago-Offline/rf-survey" target="_blank" rel="noopener">Chicago-Offline/rf-survey</a> · receive-only, always · part of <a href="https://chicagooffline.com" target="_blank" rel="noopener">Chicago Offline</a></p>
+    </div>
+  </footer>
+</body>
+</html>
