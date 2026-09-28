@@ -25,8 +25,8 @@ def energy_gate(index, freq_hz, seconds=5, squelch_db=6.0, gain=None):
     rows = run_rtl_power(index, lo, hi, 5, seconds, gain)
     if not rows:
         return False, 0.0
-    med = statistics.median(d for _, d in rows)
-    near = [d for f, d in rows if abs(f - freq_hz) <= 6250]
+    med = statistics.median(d for _, d, _step in rows)
+    near = [d for f, d, _step in rows if abs(f - freq_hz) <= 6250]
     if not near:
         return False, 0.0
     snr = max(near) - med

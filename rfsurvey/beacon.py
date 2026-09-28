@@ -59,8 +59,8 @@ def measure(index, ref, gain=None, integration_s=8):
         return {"status": ERROR, "error": str(e), "dur_s": time.time() - t0}
 
     bw = float(ref.get("bandwidth_hz") or 16000)
-    inband = [d for f, d in rows if abs(f - center) <= bw / 2.0]
-    shoulder = [d for f, d in rows if abs(f - center) > bw * 2.0]
+    inband = [d for f, d, _step in rows if abs(f - center) <= bw / 2.0]
+    shoulder = [d for f, d, _step in rows if abs(f - center) > bw * 2.0]
     if not inband or len(shoulder) < 8:
         return {"status": ERROR,
                 "error": f"insufficient bins (in={len(inband)} out={len(shoulder)})",

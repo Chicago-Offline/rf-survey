@@ -89,7 +89,7 @@ class Store:
         sid = cur.lastrowid
         self.db.executemany(
             "INSERT INTO bins(sweep_id,freq_hz,db) VALUES(?,?,?)",
-            [(sid, f, d) for f, d in rows])
+            [(sid, f, d) for f, d, _step in rows])
         self.db.commit()
         return sid
 

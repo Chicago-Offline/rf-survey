@@ -22,19 +22,46 @@ class TestSweep(unittest.TestCase):
         rows = sweep._parse_csv(p)
         os.unlink(p)
         self.assertEqual(len(rows), 4)
-        self.assertEqual(rows[0], (450000000, -20.1))
+        self.assertEqual(rows[0], (450000000, -20.1, 6250.0))
         self.assertEqual(rows[1][0], 450006250)
 
     def test_snr_hits(self):
-        rows = [(100, -35.0), (200, -34.0), (300, -10.0)]
+        rows = [(100, -35.0, 10.0), (200, -34.0, 10.0), (300, -10.0, 10.0)]
         hits = sweep.snr_hits(rows, {100: -35.0, 200: -34.5, 300: -34.0}, 12.0)
         self.assertEqual([h[0] for h in hits], [300])
         self.assertAlmostEqual(hits[0][1], 24.0)
+        self.assertEqual(hits[0][3], 10.0)  # bin_hz rides along
 
     def test_snr_bootstrap_global_median(self):
-        rows = [(1, -35.0), (2, -34.0), (3, -5.0)]
+        rows = [(1, -35.0, 10.0), (2, -34.0, 10.0), (3, -5.0, 10.0)]
         hits = sweep.snr_hits(rows, {}, 12.0)
         self.assertEqual([h[0] for h in hits], [3])
+
+    def test_snap_channel_within_tolerance(self):
+        # Real capture: requesting 6.25 kHz steps across 450-470 MHz, rtl_power
+        # actually delivered 4882.8125 Hz bins (5 Msps / 1024-pt FFT). A bin
+        # center 2.4 kHz off a 6250 Hz raster point is within half that real
+        # bin width and should snap.
+        raw = 460_092_773  # observed bin center, offset ~2.3 kHz from raster
+        channel_hz, snapped = sweep.snap_channel(raw, 4882.8125, 6250)
+        self.assertTrue(snapped)
+        self.assertEqual(channel_hz % 6250, 0)
+        self.assertLessEqual(abs(channel_hz - raw), 4882.8125 / 2 + 1)
+
+    def test_snap_channel_ambiguous_stays_raw(self):
+        # Worst case for a 6250 Hz raster: exactly 3125 Hz (half the raster
+        # spacing) from the nearest grid point. With the real observed bin
+        # width (4882.8125 Hz), half a bin is only 2441.4 Hz -- narrower
+        # than that worst-case gap -- so this must NOT snap.
+        raw = 450_000_000 + 3125
+        channel_hz, snapped = sweep.snap_channel(raw, 4882.8125, 6250)
+        self.assertFalse(snapped)
+        self.assertEqual(channel_hz, raw)  # raw bin frequency preserved, not forced
+
+    def test_snap_channel_exact_hit(self):
+        channel_hz, snapped = sweep.snap_channel(450_000_000, 4882.8125, 6250)
+        self.assertTrue(snapped)
+        self.assertEqual(channel_hz, 450_000_000)
 
 
 class TestStoreReport(unittest.TestCase):
@@ -43,7 +70,7 @@ class TestStoreReport(unittest.TestCase):
         s = Store(db)
         fix = Fix(41.88, -87.63, 180, "static")
         s.add_sweep("BENCH", "t", 450000000, 470000000, 6250, fix,
-                    [(452500000, -35.0), (452506250, -34.0)])
+                    [(452500000, -35.0, 6250.0), (452506250, -34.0, 6250.0)])
         self.assertAlmostEqual(s.channel_median("BENCH", 452500000), -35.0)
         self.assertIsNone(s.channel_median("SONDE", 452500000))  # never cross-receiver
         for _ in range(3):

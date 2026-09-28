@@ -41,13 +41,14 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                                 int(band["start_mhz"] * 1e6),
                                 int(band["stop_mhz"] * 1e6),
                                 int(band["step_khz"] * 1e3), fix, rows)
-                for f, d in rows:
+                for f, d, _step in rows:
                     medians.setdefault(f, []).append(d)
                 med_now = {f: sorted(v)[len(v) // 2] for f, v in medians.items()}
                 hits = sweep.snr_hits(rows, med_now, plan["dwell"]["snr_db"])
                 log.info("pass %d %s-%s MHz: %d bins, %d hits",
                          n, band["start_mhz"], band["stop_mhz"], len(rows), len(hits))
-                for f, snr, _db in sorted(hits, key=lambda h: -h[1]):
+                raster_hz = plan["sweep"].get("channel_raster_hz", 6250)
+                for f, snr, _db, bin_hz in sorted(hits, key=lambda h: -h[1]):
                     hits_count[f] += 1
                     if hits_count[f] < plan["dwell"]["min_hits"]:
                         continue
@@ -56,9 +57,17 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                     dwelled[f] = time.time()
                     log.info("dwell %.4f MHz (snr %.1f dB, %d hits)",
                              f / 1e6, snr, hits_count[f])
+                    # Dwell/decode at the raw measured bin -- that's where the
+                    # energy actually was.  Snapping is purely a reporting
+                    # decision, applied only to what we record as freq_hz.
                     gated, gsnr, meta = dwell_mod.dwell(
                         idx, f, plan["dwell"], gain)
-                    store.add_observation(serial, f, round(max(snr, gsnr), 1),
+                    channel_hz, snapped = sweep.snap_channel(f, bin_hz, raster_hz)
+                    meta = dict(meta or {})
+                    meta["bin_freq_hz"] = f
+                    meta["channel_snap"] = snapped
+                    store.add_observation(serial, channel_hz,
+                                          round(max(snr, gsnr), 1),
                                           plan["dwell"]["duration_s"],
                                           plan["dwell"]["decoder"],
                                           gated, meta, loc.get())
