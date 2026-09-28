@@ -10,6 +10,17 @@ location:
   # host: 127.0.0.1
   # port: 2947
 
+station:                # network submission (NETWORK.md; survey station-init)
+  id: bowmanville       # stable station id, registered with the aggregator
+  key: ~/.config/rf-survey/station.key
+  mqtt:
+    server: wsmqtt-dev.chicagooffline.com   # prod: wsmqtt.chioff.com
+    port: 443
+    transport: websockets
+    tls: true
+    token_file: ~/.config/rf-survey/mqtt.token
+    topic_prefix: rfsurvey
+
 devices:                # keyed by EEPROM serial
   BENCH:
     role: digital       # R820T2 — sensitivity-critical DMR dwell
