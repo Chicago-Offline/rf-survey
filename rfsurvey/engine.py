@@ -27,6 +27,24 @@ def band_raster_hz(band, plan):
     return plan["sweep"].get("channel_raster_hz", DEFAULT_RASTER_HZ)
 
 
+def band_dwell(band, plan):
+    """Dwell settings for this band: band overrides merged over the plan's.
+
+    One dwell block per plan is wrong for the same reason one raster is
+    (band_raster_hz above): a plan that spans services spans decoders too.
+    450-470 business LMR wants the dmr decoder, while 851-869 is trunked
+    and must stay on the energy-only nfm path until trunking decode exists
+    -- NETWORK.md S4 is explicit that the route there is integrating
+    trunk-recorder/sdrtrunk as a side decoder, not reimplementing one here.
+
+    Merged rather than replaced, so a band can set just "decoder:" without
+    restating snr_db / min_hits / duration_s / squelch_db.
+    """
+    merged = dict(plan["dwell"])
+    merged.update(band.get("dwell") or {})
+    return merged
+
+
 def ppm_tolerance_hz(devcfg, band):
     """Receiver frequency error in Hz across this band, from configured PPM.
 
@@ -58,6 +76,7 @@ def run(cfg, plan, serial, force=False, max_passes=None):
         while True:
             n += 1
             for band in plan["bands"]:
+                bdwell = band_dwell(band, plan)
                 fix = loc.get()
                 try:
                     rows = sweep.run_rtl_power(
@@ -75,14 +94,14 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                 for f, d, _step in rows:
                     medians.setdefault(f, []).append(d)
                 med_now = {f: sorted(v)[len(v) // 2] for f, v in medians.items()}
-                hits = sweep.snr_hits(rows, med_now, plan["dwell"]["snr_db"])
+                hits = sweep.snr_hits(rows, med_now, bdwell["snr_db"])
                 log.info("pass %d %s-%s MHz: %d bins, %d hits",
                          n, band["start_mhz"], band["stop_mhz"], len(rows), len(hits))
                 raster_hz = band_raster_hz(band, plan)
                 ppm_hz = ppm_tolerance_hz(devcfg, band)
                 for f, snr, _db, bin_hz in sorted(hits, key=lambda h: -h[1]):
                     hits_count[f] += 1
-                    if hits_count[f] < plan["dwell"]["min_hits"]:
+                    if hits_count[f] < bdwell["min_hits"]:
                         continue
                     if time.time() - dwelled.get(f, 0) < 300:
                         continue  # don't re-dwell the same channel within 5 min
@@ -107,7 +126,7 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                         log.warning("  refine failed, using sweep bin: %s", e)
 
                     gated, gsnr, meta = dwell_mod.dwell(
-                        idx, tune_hz, plan["dwell"], gain)
+                        idx, tune_hz, bdwell, gain)
                     tol = max(meas_bin_hz / 2, ppm_hz) if refined else None
                     channel_hz, snapped = sweep.snap_channel(
                         tune_hz, meas_bin_hz, raster_hz, tol)
@@ -124,8 +143,8 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                     meta["channel_snap"] = snapped
                     store.add_observation(serial, channel_hz,
                                           round(max(snr, gsnr), 1),
-                                          plan["dwell"]["duration_s"],
-                                          plan["dwell"]["decoder"],
+                                          bdwell["duration_s"],
+                                          bdwell["decoder"],
                                           gated, meta, loc.get())
             if passes and n >= passes:
                 log.info("completed %d passes, exiting cleanly", n)

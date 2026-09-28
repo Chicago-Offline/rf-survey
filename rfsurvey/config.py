@@ -30,7 +30,7 @@ REQUIRED_PLAN_KEYS = ("name", "bands")
 def load_plan(path):
     """Scan plan: bands, sweep params, dwell rules.
 
-    bands: [{start_mhz, stop_mhz, step_khz, channel_raster_hz?}]
+    bands: [{start_mhz, stop_mhz, step_khz, channel_raster_hz?, dwell?}]
     sweep: {integration_s, gain, passes, channel_raster_hz?}
 
     channel_raster_hz is the channel grid used to name a measured
@@ -39,6 +39,13 @@ def load_plan(path):
     mobile, railroad AAR and 2m all land on multiples of 2500.  A band
     setting wins over the plan-level one; unset means 6250.
     dwell: {snr_db, min_hits, duration_s, decoder, squelch_db}
+
+    A band may carry its own partial "dwell" block, merged over the
+    plan-level one (engine.band_dwell), for the same reason the raster
+    belongs per band: one plan can span services that need different
+    decoders.  450-470 business LMR wants dmr, while 851-869 is trunked
+    and stays on energy-only nfm until trunking decode is integrated
+    (NETWORK.md S4).  Only the keys you set are overridden.
     """
     plan = load_yaml(path)
     for k in REQUIRED_PLAN_KEYS:
@@ -64,4 +71,14 @@ def load_plan(path):
                 isinstance(raster, (int, float)) and raster > 0):
             raise ConfigError(
                 f"channel_raster_hz must be a positive number: {raster!r}")
+    # Reject an unknown decoder at load time. Otherwise the typo survives
+    # startup and only raises deep inside the first dwell, minutes into an
+    # unattended run, then again on every subsequent hit.
+    from .dwell import DECODERS
+    for scope in [plan["dwell"]] + [b.get("dwell") or {} for b in plan["bands"]]:
+        dec = scope.get("decoder")
+        if dec is not None and dec not in DECODERS:
+            raise ConfigError(
+                f"unknown decoder {dec!r}: known decoders are "
+                f"{', '.join(sorted(DECODERS))}")
     return plan

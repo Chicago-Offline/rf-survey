@@ -121,6 +121,79 @@ class TestBandRaster(unittest.TestCase):
         self.assertGreater(engine.ppm_tolerance_hz({}, band), 0)
 
 
+class TestBandDwell(unittest.TestCase):
+    PLAN = {"dwell": {"snr_db": 8, "min_hits": 3, "duration_s": 90,
+                      "decoder": "nfm", "squelch_db": 6}}
+
+    def test_band_without_dwell_inherits_plan(self):
+        self.assertEqual(engine.band_dwell({"name": "x"}, self.PLAN),
+                         self.PLAN["dwell"])
+
+    def test_band_overrides_merge_not_replace(self):
+        # A band sets only the decoder; everything else must still arrive,
+        # otherwise dwell() KeyErrors on snr_db/duration_s at the first hit.
+        band = {"dwell": {"decoder": "dmr", "duration_s": 45}}
+        got = engine.band_dwell(band, self.PLAN)
+        self.assertEqual(got["decoder"], "dmr")
+        self.assertEqual(got["duration_s"], 45)
+        self.assertEqual(got["snr_db"], 8)
+        self.assertEqual(got["min_hits"], 3)
+        self.assertEqual(got["squelch_db"], 6)
+
+    def test_does_not_mutate_shared_plan(self):
+        # The plan dwell dict is reused for every band on every pass; if a
+        # band override leaked into it, one dmr band would silently convert
+        # the whole plan after the first sweep.
+        engine.band_dwell({"dwell": {"decoder": "dmr"}}, self.PLAN)
+        self.assertEqual(self.PLAN["dwell"]["decoder"], "nfm")
+
+    def test_empty_and_null_dwell_are_no_ops(self):
+        for value in ({}, None):
+            self.assertEqual(engine.band_dwell({"dwell": value}, self.PLAN),
+                             self.PLAN["dwell"])
+
+    def test_mixed_plan_keeps_trunked_band_on_nfm(self):
+        # The real case: 450-470 gets dmr while 851-869 stays energy-only
+        # until trunking decode is integrated (NETWORK.md S4).
+        biz = {"dwell": {"decoder": "dmr"}}
+        trunked = {"channel_raster_hz": 12500}
+        self.assertEqual(engine.band_dwell(biz, self.PLAN)["decoder"], "dmr")
+        self.assertEqual(engine.band_dwell(trunked, self.PLAN)["decoder"], "nfm")
+
+
+class TestDecoderValidation(unittest.TestCase):
+    def _load(self, body):
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as f:
+            f.write(body)
+            p = f.name
+        try:
+            return config.load_plan(p)
+        finally:
+            os.unlink(p)
+
+    def test_band_decoder_accepted(self):
+        plan = self._load(
+            "name: t\nbands:\n"
+            "  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25,"
+            " dwell: {decoder: dmr}}\n")
+        self.assertEqual(plan["bands"][0]["dwell"]["decoder"], "dmr")
+
+    def test_unknown_band_decoder_rejected_at_load(self):
+        # Must fail at startup, not minutes later inside the first dwell.
+        with self.assertRaises(config.ConfigError):
+            self._load(
+                "name: t\nbands:\n"
+                "  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25,"
+                " dwell: {decoder: DMR}}\n")
+
+    def test_unimplemented_decoder_rejected(self):
+        # p25 is named in tier()'s digital set but has no dwell here yet.
+        with self.assertRaises(config.ConfigError):
+            self._load("name: t\nbands:\n"
+                       "  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25}\n"
+                       "dwell: {decoder: p25}\n")
+
+
 class TestRefineCarrier(unittest.TestCase):
     def _rows(self, center, peak_hz):
         rows = []
