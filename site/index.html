@@ -63,24 +63,12 @@
           serial, observations land in SQLite, and every record carries where
           and how it was heard.
         </p>
-        <div class="pipeline">
-          <article>
-            <h3>Sweep</h3>
-            <p>Wide-band power scans via <code>rtl_power</code>. SNR is measured against each bin's own long-term median — never a raw dB number, never another receiver's floor.</p>
-          </article>
-          <article>
-            <h3>Dwell</h3>
-            <p>Channels that clear the SNR threshold get a bounded-lifetime dwell: analog FM with squelch, or digital decode via <code>dsd-fme</code>. Supervised subprocesses, verified device release.</p>
-          </article>
-          <article>
-            <h3>Decode</h3>
-            <p>Color codes, talkgroups, radio IDs — parsed into structured metadata. An energy gate decides whether a decode is trusted at all, because digital decoders happily invent sync on pure noise.</p>
-          </article>
-          <article>
-            <h3>Report</h3>
-            <p>Human summaries, CSV/JSON export, and SSRF-Lite candidate stubs with cited observations. A human reviews before anything lands in the database — one dwell is not a system.</p>
-          </article>
-        </div>
+        <ol class="chain">
+          <li><strong>Sweep</strong><span>wide-band power scan; SNR against each bin's own long-term median — never raw dB</span></li>
+          <li><strong>Dwell</strong><span>bounded-lifetime listen on anything that clears the threshold — FM or digital</span></li>
+          <li><strong>Decode</strong><span>color codes, talkgroups, radio IDs — trusted only when the energy gate agrees</span></li>
+          <li><strong>Report</strong><span>SSRF-Lite candidate stubs with cited observations; a human reviews before merge</span></li>
+        </ol>
       </div>
     </section>
 
@@ -88,27 +76,14 @@
       <div class="wrap">
         <h2>The validation ladder</h2>
         <p class="sub">
-          Every system/channel pair earns a verification tier per station.
-          Higher tiers mean higher confidence when a codeplug gets built from
-          the data.
+          Every system/channel pair earns a verification tier per station —
+          the higher the rung, the more a codeplug can trust it.
         </p>
-        <div class="pipeline">
-          <article>
-            <h3>V0 · Heard</h3>
-            <p>Energy seen above the per-channel noise median, confirmed by the activity gate during a sweep.</p>
-          </article>
-          <article>
-            <h3>V1 · Decoded</h3>
-            <p>Decode metadata — color code, talkgroups, NAC — consistent with the SSRF-Lite record. Contradictions flag the record for human review.</p>
-          </article>
-          <article>
-            <h3>V2 · Voice</h3>
-            <p>Voice activity confirmed on dwell audio, not just a carrier or data bursts.</p>
-          </article>
-          <article>
-            <h3>V3 · Recorded</h3>
-            <p>An archived clip backs the observation. The strongest evidence a record can carry.</p>
-          </article>
+        <div class="ladder">
+          <div class="rung r3"><span class="tier">V3</span><strong>Recorded</strong><span>an archived clip backs the observation</span></div>
+          <div class="rung r2"><span class="tier">V2</span><strong>Voice</strong><span>confirmed speech on dwell audio, not just a carrier</span></div>
+          <div class="rung r1"><span class="tier">V1</span><strong>Decoded</strong><span>metadata matches the SSRF-Lite record — contradictions get flagged</span></div>
+          <div class="rung r0"><span class="tier">V0</span><strong>Heard</strong><span>energy above the channel's noise median, activity-gated</span></div>
         </div>
       </div>
     </section>
@@ -116,29 +91,19 @@
     <section id="network">
       <div class="wrap">
         <h2>A distributed survey network</h2>
-        <p class="sub">
-          Fixed stations around Chicagoland — plus mobile rigs — continuously
-          scanning and submitting signed observation batches over MQTT.
+        <p class="lead-tight">
+          Fixed stations around Chicagoland — plus mobile rigs — scan
+          continuously and submit signed observation batches over MQTT. A
+          central aggregator verifies signatures, stores append-only evidence,
+          and promotes records: <em>verified</em> when multiple stations agree
+          across days, <em>flagged</em> when a decode contradicts the record,
+          <em>stale</em> when the air goes quiet. Stations keep themselves
+          honest by measuring shared beacons — NWS 162.55, ATSC pilots — so
+          hardware drift is caught automatically. The payoff lands in
+          <a href="https://chicago-offline.github.io/codeplugger/" target="_blank" rel="noopener">codeplugger</a>:
+          program only channels somebody actually heard, recently, near you.
         </p>
-        <div class="pipeline">
-          <article>
-            <h3>Stations</h3>
-            <p>Each install has a stable identity and an Ed25519 keypair. Enrollment is manual and small by design — a trusted set of calibrated receivers beats an open crowd of unknown ones.</p>
-          </article>
-          <article>
-            <h3>Beacon calibration</h3>
-            <p>Stations regularly measure shared reference signals — NWS 162.55, ATSC pilots, FM broadcast — to detect hardware drift and keep cross-station comparisons honest.</p>
-          </article>
-          <article>
-            <h3>Aggregation</h3>
-            <p>A central service verifies signatures, stores append-only evidence, and applies the promotion rules: verified, flagged, or stale. Policy lives in one place, not on N Raspberry Pis.</p>
-          </article>
-          <article>
-            <h3>Payoff</h3>
-            <p><a href="https://chicago-offline.github.io/codeplugger/" target="_blank" rel="noopener">codeplugger</a> can filter on verification tier and location — program only channels somebody actually heard, recently, near you.</p>
-          </article>
-        </div>
-        <p class="sub" style="margin-top:1.5rem">
+        <p class="sub">
           Receive-only, always. Surveyed systems are licensed to other people.
           Full design in <a href="https://github.com/Chicago-Offline/rf-survey/blob/main/NETWORK.md" target="_blank" rel="noopener">NETWORK.md</a>.
         </p>
