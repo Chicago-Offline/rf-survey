@@ -61,7 +61,7 @@ devices:
       model: "HT dual-band whip (2m/70cm)"
       type: omni            # omni | discone | yagi | vertical
       gain_dbi: 2.15
-      bands_mhz: [[144, 148], [430, 450]]   # where this antenna is real
+      bands_mhz: [[136, 174], [400, 470]]   # USABLE RX REACH, not resonance
     placement:
       location: "bench, indoor"
       height_m: 1.1
@@ -72,6 +72,15 @@ devices:
 it to decide which beacon references an observer may legitimately be scored
 against (§7). An observer with no antenna coverage at a reference frequency
 is `no_reference` for that band — never scored as healthy by omission.
+
+⚠️ **`bands_mhz` is usable RX reach, not the resonant/design bands.** The
+example above is an HT *dual-band* whip — nominally 2m/70cm — but it receives
+roughly 136–174 and 400–520, and hears NWS 162.550 without trouble. Entering
+the resonant bands `[[144, 148], [430, 450]]` instead puts every Chicagoland
+reference out of range and **silently disables calibration for that
+observer**: the pass runs, reports nothing, and raises no error. The failure
+is quiet, so prefer the receive spec when in doubt. (This exact mistake was
+made and caught in testing — it is not hypothetical.)
 
 Fixed sites report a constant position; mobile stations (12vpi) attach the
 GPS fix per observation (M3).
