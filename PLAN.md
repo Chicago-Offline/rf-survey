@@ -106,6 +106,11 @@ Known pain points (all field-verified):
   CSV/JSON export.
 - **M6 — portability**: SoapySDR backend, packaging (pipx), docs for
   non-meshpi installs.
+  - ✅ **2026-09-29 (partial):** `survey setup` wizard, `survey doctor`, `survey plans`;
+    bundled plans (`uhf-dmr`, `2m-fm`, `chicago-ham`) installed inside the package
+    so they work after `pipx install`; `references/chicago.yml` moved into package;
+    README and site/index.html updated with pipx install path + PEP 668 note;
+    SoapySDR backend deferred to a follow-on milestone.
 
 ## Implementation notes
 

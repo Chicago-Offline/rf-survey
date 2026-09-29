@@ -164,18 +164,20 @@ flowchart LR
     <section id="start">
       <div class="wrap">
         <h2>Quick start</h2>
-        <p class="sub">Python 3.9+, <code>rtl-sdr</code> tools on the path, optional <code>dsd-fme</code> for digital dwell.</p>
+        <p class="sub">Python 3.9+, <code>rtl-sdr</code> tools on the path, optional <code>dsd-fme</code> for digital dwell. Use <code>pipx</code> to install — <code>pip install</code> is blocked on Debian 12+/Ubuntu 22.04+ (PEP 668).</p>
         <div class="start">
           <div>
             <h3>Install and list devices</h3>
-<pre><code>pip install git+https://github.com/Chicago-Offline/rf-survey
-survey devices
-<span class="c"># 0: SN=BENCH  Realtek RTL2838UHIDIR  digital</span>
-<span class="c"># 1: SN=SONDE  Realtek RTL2838UHIDIR  analog</span></code></pre>
+<pre><code>sudo apt install -y rtl-sdr pipx   <span class="c"># Debian/Ubuntu</span>
+pipx install git+https://github.com/Chicago-Offline/rf-survey
+survey setup   <span class="c"># wizard: deps → hardware → config</span>
+<span class="c"># or: survey devices</span>
+<span class="c"># 0: SN=BENCH  Realtek RTL2838UHIDIR  digital</span></code></pre>
           </div>
           <div>
             <h3>Run a scan plan</h3>
-<pre><code>survey run examples/plan-uhf-dmr.yml --serial BENCH
+<pre><code>survey run uhf-dmr --serial BENCH   <span class="c"># name, no path needed</span>
+survey run chicago-ham --serial BENCH
 survey report
 survey candidates   <span class="c"># ssrf-lite stubs, cited evidence</span></code></pre>
           </div>

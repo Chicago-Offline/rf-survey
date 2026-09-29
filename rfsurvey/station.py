@@ -27,7 +27,9 @@ class StationError(Exception):
 def _require_crypto():
     if not HAVE_CRYPTO:
         raise StationError(
-            "cryptography not installed — pip install 'rf-survey[submit]'")
+            "cryptography not installed — "
+            "pipx inject rf-survey cryptography  "
+            "(or reinstall: pipx install 'rf-survey[submit]')")
 
 
 def canonical(obj):
