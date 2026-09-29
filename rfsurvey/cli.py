@@ -120,7 +120,7 @@ def cmd_beacon_check(args, cfg):
     results = beacon_mod.check(cfg, store, args.serial, refs,
                                integration_s=args.integration,
                                force=args.force,
-                               include_uncovered=args.include_uncovered)
+                               include_uncovered=not args.skip_uncovered)
 
     rows = []
     for ref, verdict, reading in results:
@@ -135,9 +135,13 @@ def cmd_beacon_check(args, cfg):
             "drift": d, "error": reading.get("error"),
         })
 
-    # Uncovered bands are reported, never silently omitted.
+    # Skipped uncovered bands are reported, never silently omitted. In the
+    # default measure-everything mode nothing is skipped, so this is empty
+    # and the measured rows above carry the no_reference verdict instead.
+    measured_ids = {r["ref"] for r in rows}
     uncovered = [r for r in refs
-                 if ref_mod.coverage(r, dev_cfg) == ref_mod.NO_REFERENCE]
+                 if ref_mod.coverage(r, dev_cfg) == ref_mod.NO_REFERENCE
+                 and r["id"] not in measured_ids]
 
     if args.json:
         print(json.dumps({"receiver": args.serial, "readings": rows,
@@ -160,6 +164,11 @@ def cmd_beacon_check(args, cfg):
         status = r["status"]
         if r["coverage"] == ref_mod.UNVERIFIED and status == beacon_mod.OK:
             status = "ok(unverif)"
+        elif r["coverage"] == ref_mod.NO_REFERENCE \
+                and status == beacon_mod.OK:
+            # Heard on an antenna not rated for the band: real reception,
+            # unscoreable reading.
+            status = "ok(no_ref)"
         print(f"{r['ref']:<16}{r['freq_hz']/1e6:>11.4f} {r['band']:<13}"
               f"{status:<13}{snr:>7}{sig:>8}{dr:>9}")
         if r["error"]:
@@ -323,9 +332,11 @@ def main(argv=None):
                     help="seconds per reference (default: 8)")
     bc.add_argument("--baseline-days", type=int, default=7,
                     help="drift baseline window (default: 7)")
-    bc.add_argument("--include-uncovered", action="store_true",
-                    help="also measure references outside the declared antenna "
-                         "bands (diagnostic only — never feeds a baseline)")
+    bc.add_argument("--skip-uncovered", action="store_true",
+                    help="skip references outside the declared antenna bands "
+                         "instead of measuring them (measuring is the "
+                         "default; the reading is recorded as no_reference "
+                         "and never feeds a score)")
     bc.add_argument("--force", action="store_true",
                     help="take the device from current holders")
     bc.add_argument("--json", action="store_true")

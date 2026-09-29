@@ -284,7 +284,11 @@ Rules that keep it honest:
 5. **Score per observer, not per station** (§1). An observer is only scored
    against references its `antenna.bands_mhz` actually covers; everything
    else is `no_reference`. A station with a good VHF observer and a deaf UHF
-   one must not average out to "healthy".
+   one must not average out to "healthy". `no_reference` bands are still
+   **measured** on every pass (2026-09-28): an off-band antenna receives
+   badly, not never, and the reading is a useful front-end datum — the
+   verdict on the reading is what keeps it out of the score, not a refusal
+   to look.
 
 **N is measured, not guessed.** The flag threshold above has no defensible
 value until we know the system's own noise floor. Two co-sited observers

@@ -80,7 +80,7 @@ def measure(index, ref, gain=None, integration_s=8):
 
 
 def check(cfg, store, serial, refs, integration_s=8, force=False,
-          include_uncovered=False):
+          include_uncovered=True):
     """Run a full beacon-check pass for one observer.
 
     Returns [(ref, verdict, reading)] and persists every reading.
@@ -95,16 +95,20 @@ def check(cfg, store, serial, refs, integration_s=8, force=False,
 
     plan = references.plan_for(refs, dev_cfg,
                                include_uncovered=include_uncovered)
-    skipped = [r for r in refs
-               if references.coverage(r, dev_cfg) == references.NO_REFERENCE]
-    for r in skipped:
-        # Recorded, not measured: a no_reference band must stay visibly
-        # uncalibrated rather than silently absent.
-        store.add_beacon_reading(
-            receiver=serial, ref_id=r["id"], freq_hz=int(r["freq_hz"]),
-            band=r.get("band"), coverage=references.NO_REFERENCE,
-            signal_db=None, noise_db=None, snr_db=None, gain=gain,
-            status=references.NO_REFERENCE, pinned=gain is not None)
+    if not include_uncovered:
+        # Old behavior only: recorded, not measured, so a skipped
+        # no_reference band stays visibly uncalibrated rather than
+        # silently absent. In the default measure-everything mode these
+        # refs are in the plan and get a real reading instead -- writing
+        # the placeholder too would double-record every pass.
+        for r in refs:
+            if references.coverage(r, dev_cfg) != references.NO_REFERENCE:
+                continue
+            store.add_beacon_reading(
+                receiver=serial, ref_id=r["id"], freq_hz=int(r["freq_hz"]),
+                band=r.get("band"), coverage=references.NO_REFERENCE,
+                signal_db=None, noise_db=None, snr_db=None, gain=gain,
+                status=references.NO_REFERENCE, pinned=gain is not None)
 
     results = []
     if not plan:
