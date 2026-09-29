@@ -7,14 +7,22 @@ import time
 
 import yaml
 
-from . import devices, config, report as report_mod
+from . import devices, config, report as report_mod, plans as plans_mod
 from .store import Store
 
 
 def cmd_devices(args, cfg):
-    devs = devices.list_devices()
+    try:
+        devs = devices.list_devices()
+    except devices.DeviceError as e:
+        print(f"error: {e}", file=sys.stderr)
+        hint = _rtl_install_hint()
+        if hint:
+            print(f"  install: {hint}", file=sys.stderr)
+        return 1
     if not devs:
         print("no RTL-SDR devices found")
+        print("  plug in your dongle, then run: survey devices", file=sys.stderr)
         return 1
     roles = cfg.get("devices", {})
     for d in devs:
@@ -28,7 +36,12 @@ def cmd_devices(args, cfg):
 
 def cmd_run(args, cfg):
     from . import engine
-    plan = config.load_plan(args.plan)
+    try:
+        plan_path = plans_mod.resolve(args.plan)
+    except plans_mod.PlanError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    plan = config.load_plan(plan_path)
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -66,6 +79,61 @@ def cmd_candidates(args, cfg):
     return 0
 
 
+def _rtl_install_hint():
+    """One-liner install hint for rtl-sdr on this platform."""
+    from . import deps
+    return deps.install_hint("rtl-sdr")
+
+
+def cmd_plans(args, cfg):
+    catalog = plans_mod.bundled_catalog()
+    if not catalog:
+        print("no bundled plans found", file=sys.stderr)
+        return 1
+    for name, path, desc in catalog:
+        suffix = ("  # " + desc) if desc else ""
+        print(f"{name:<16}{suffix}")
+    return 0
+
+
+def cmd_doctor(args, cfg):
+    from . import deps
+    results = deps.check_all()
+    missing = deps.missing_required(results)
+    if missing:
+        hint = deps.aggregate_install_hint(results)
+        print(deps.format_results(results))
+        print()
+        print("missing: " + ", ".join(r["name"] for r in missing),
+              file=sys.stderr)
+        if hint:
+            print("install: " + hint, file=sys.stderr)
+        return 1
+    probe = deps.probe_rtl_test()
+    if probe["status"] != deps.OK:
+        print(deps.format_results(results))
+        print()
+        print(f"hardware: {probe['detail']}", file=sys.stderr)
+        if probe.get("hint"):
+            print(f"  fix: {probe['hint']}", file=sys.stderr)
+        return 1
+    print(deps.format_results(results))
+    print("\nall checks passed")
+    return 0
+
+
+def cmd_setup(args, cfg):
+    from . import setup_wizard
+    try:
+        return setup_wizard.run(
+            config_path=args.config,
+            skip_checks=args.skip_checks,
+        )
+    except setup_wizard.SetupError as e:
+        print(f"setup error: {e}", file=sys.stderr)
+        return 1
+
+
 def cmd_station_init(args, cfg):
     from . import station as station_mod
     st = station_mod.Station.create(args.id, args.key or station_mod.DEFAULT_KEY)
@@ -74,7 +142,7 @@ def cmd_station_init(args, cfg):
     print("add to config.yml:\n"
           f"station:\n  id: {st.station_id}\n"
           f"  key: {args.key or station_mod.DEFAULT_KEY}\n"
-          "  mqtt:\n    server: wsmqtt-dev.chicagooffline.com\n"
+          "  mqtt:\n    server: wsmqtt.chioff.com\n"
           "    token_file: ~/.config/rf-survey/mqtt.token")
     return 0
 
@@ -294,10 +362,15 @@ def main(argv=None):
     p.add_argument("--config", help="site config YAML")
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    sub.add_parser("doctor", help="check deps and hardware, print fix hints")
+
+    sub.add_parser("plans", help="list bundled survey plans")
+
     sub.add_parser("devices", help="list SDRs by serial, role, busy state")
 
     r = sub.add_parser("run", help="run a scan plan on one device")
-    r.add_argument("plan", help="scan plan YAML")
+    r.add_argument("plan",
+                   help="plan file path OR bundled plan name (uhf-dmr, 2m-fm, chicago-ham)")
     r.add_argument("--serial", required=True, help="device serial (not index)")
     r.add_argument("--passes", type=int, default=None,
                    help="stop after N passes (default: plan's setting; 0=forever)")
@@ -348,9 +421,14 @@ def main(argv=None):
     ms.add_argument("--receiver", help="filter by device serial")
     ms.add_argument("--json", action="store_true")
 
+    su = sub.add_parser("setup", help="first-run wizard: deps, hardware, config")
+    su.add_argument("--skip-checks", action="store_true",
+                    help="skip dependency check (still runs hardware scan)")
+
     args = p.parse_args(argv)
     cfg = config.load_config(args.config)
-    return {"devices": cmd_devices, "run": cmd_run, "release": cmd_release,
+    return {"setup": cmd_setup, "doctor": cmd_doctor, "plans": cmd_plans,
+            "devices": cmd_devices, "run": cmd_run, "release": cmd_release,
             "report": cmd_report, "candidates": cmd_candidates,
             "station-init": cmd_station_init, "submit": cmd_submit,
             "beacon-check": cmd_beacon_check,

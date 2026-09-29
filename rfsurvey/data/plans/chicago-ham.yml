@@ -1,0 +1,35 @@
+# Chicago amateur-band discovery plan.
+#
+# 2 m and 70 cm repeater sub-bands as they are actually used around
+# Chicagoland.  This is a DISCOVERY plan: it sweeps, gates on energy, and
+# dwells on whatever it finds.  It deliberately carries no monitor targets
+# -- target lists are generated from ssrf-lite by tools/gen_targets.py and
+# go stale, so they live in the repo (plans/plan-chicago-monitor.yml), not
+# in the installed package.
+#
+# Good default for a new observer with a discone or a dual-band vertical.
+name: chicago-ham
+description: Chicago 2 m + 70 cm amateur repeater discovery (FM)
+
+sweep:
+  integration_s: 10
+  passes: 0                 # run forever; Ctrl-C to stop
+
+dwell:
+  snr_db: 12.0
+  min_hits: 3
+  duration_s: 60
+  decoder: nfm
+  squelch_db: 6.0
+
+bands:
+  # 2 m repeater outputs.  2 m sits on a 2.5 kHz grid, not 6.25.
+  - start_mhz: 145.1
+    stop_mhz: 148.0
+    step_khz: 2.5
+    channel_raster_hz: 2500
+  # 70 cm repeater outputs.
+  - start_mhz: 442.0
+    stop_mhz: 448.0
+    step_khz: 2.5
+    channel_raster_hz: 2500

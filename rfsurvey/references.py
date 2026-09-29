@@ -11,9 +11,12 @@ from .config import ConfigError, load_yaml
 
 SCHEMA_ID = "rfsurvey.references.v1"
 
-# Bundled sets live at <repo>/references/<region>.yml
+# Bundled sets live inside the package so they are available after
+# `pipx install`.  During a repo checkout the old top-level references/
+# directory is gone (contents moved to rfsurvey/data/references/ by the
+# onboarding-setup commit), but a dev clone will have the data there too.
 BUNDLED_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "references")
+    os.path.dirname(os.path.abspath(__file__)), "data", "references")
 
 REQUIRED_REF_KEYS = ("id", "freq_hz", "band", "kind")
 

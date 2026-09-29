@@ -17,3 +17,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["rfsurvey*"]
+
+[tool.setuptools.package-data]
+rfsurvey = ["data/plans/*.yml", "data/references/*.yml"]
