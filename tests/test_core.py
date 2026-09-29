@@ -297,5 +297,48 @@ class TestStaticLocation(unittest.TestCase):
         self.assertEqual(loc.get().as_tuple()[:2], (1.0, 2.0))
 
 
+class TestReferenceCoverage(unittest.TestCase):
+    """S7 rule 5 fences SCORING, not looking: uncovered refs are measured
+    by default, carrying no_reference so they cannot feed a score."""
+
+    REFS = [
+        {"id": "fm", "freq_hz": 91_500_000, "band": "fm-broadcast",
+         "kind": "fm", "bandwidth_hz": 200_000},
+        {"id": "nws", "freq_hz": 162_550_000, "band": "vhf-high",
+         "kind": "nfm", "bandwidth_hz": 16_000},
+    ]
+    DEV = {"antenna": {"bands_mhz": [[136, 174]]}}
+
+    def test_coverage_verdicts(self):
+        from rfsurvey import references as ref_mod
+        self.assertEqual(ref_mod.coverage(self.REFS[0], self.DEV),
+                         ref_mod.NO_REFERENCE)
+        self.assertEqual(ref_mod.coverage(self.REFS[1], self.DEV),
+                         ref_mod.OK)
+        self.assertEqual(ref_mod.coverage(self.REFS[0], {}),
+                         ref_mod.UNVERIFIED)
+
+    def test_plan_measures_uncovered_by_default(self):
+        from rfsurvey import references as ref_mod
+        plan = ref_mod.plan_for(self.REFS, self.DEV)
+        self.assertEqual(len(plan), 2)
+        verdicts = {r["id"]: v for r, v in plan}
+        # Measured, but the unscoreable verdict travels with the reading.
+        self.assertEqual(verdicts["fm"], ref_mod.NO_REFERENCE)
+        self.assertEqual(verdicts["nws"], ref_mod.OK)
+
+    def test_skip_uncovered_restores_old_behavior(self):
+        from rfsurvey import references as ref_mod
+        plan = ref_mod.plan_for(self.REFS, self.DEV,
+                                include_uncovered=False)
+        self.assertEqual([r["id"] for r, _v in plan], ["nws"])
+
+    def test_undeclared_antenna_measures_everything_as_unverified(self):
+        from rfsurvey import references as ref_mod
+        plan = ref_mod.plan_for(self.REFS, {})
+        self.assertEqual(len(plan), 2)
+        self.assertTrue(all(v == ref_mod.UNVERIFIED for _r, v in plan))
+
+
 if __name__ == "__main__":
     unittest.main()

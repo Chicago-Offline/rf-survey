@@ -106,14 +106,19 @@ def coverage(ref, device_cfg):
     return OK if any(lo <= f <= hi for lo, hi in bands) else NO_REFERENCE
 
 
-def plan_for(refs, device_cfg, include_uncovered=False):
+def plan_for(refs, device_cfg, include_uncovered=True):
     """[(ref, verdict)] for one observer.
 
-    By default `no_reference` entries are dropped from the measurement plan:
-    pointing a 2 m whip at 500 MHz produces a number, and that number is a
-    lie waiting to be averaged into a baseline.  `unverified` entries ARE
-    measured -- the reading is useful to a human, it just cannot feed a score
-    until the antenna is declared.
+    Every reference is measured by default, INCLUDING `no_reference` ones
+    (Eric, 2026-09-28): an off-band antenna still receives, just badly, and
+    the reading is worth having -- a blowtorch FM station that vanishes on a
+    2 m whip is still a front-end datum.  What protects the scores is the
+    verdict travelling WITH the reading: `no_reference` marks it
+    unscoreable, exactly like `unverified` marks an undeclared antenna.
+    The S7 rule 5 fence is about SCORING, not about refusing to look.
+
+    include_uncovered=False restores the old skip-them behavior for callers
+    that only want scoreable measurements.
     """
     out = []
     for r in refs:
