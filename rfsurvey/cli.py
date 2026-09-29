@@ -142,7 +142,7 @@ def cmd_station_init(args, cfg):
     print("add to config.yml:\n"
           f"station:\n  id: {st.station_id}\n"
           f"  key: {args.key or station_mod.DEFAULT_KEY}\n"
-          "  mqtt:\n    server: wsmqtt-dev.chicagooffline.com\n"
+          "  mqtt:\n    server: wsmqtt.chioff.com\n"
           "    token_file: ~/.config/rf-survey/mqtt.token")
     return 0
 

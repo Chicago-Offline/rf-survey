@@ -403,7 +403,7 @@ def render_config(station_id, location, device_cfg, db_path, key_path):
     add("  # send the public key printed by survey station-init to the")
     add("  # operator, then save the token they issue to token_file.")
     add("  mqtt:")
-    add("    server: wsmqtt-dev.chicagooffline.com")
+    add("    server: wsmqtt.chioff.com")
     add("    port: 443")
     add("    transport: websockets")
     add("    tls: true")
