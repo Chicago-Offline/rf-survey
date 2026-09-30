@@ -392,10 +392,24 @@ def cmd_monitor_status(args, cfg):
     return 0
 
 
+def _version():
+    """Installed version, for --version and for installers to report."""
+    try:
+        from importlib.metadata import version, PackageNotFoundError
+    except ImportError:  # py3.7
+        return "unknown"
+    try:
+        return version("rf-survey")
+    except PackageNotFoundError:
+        return "unknown (not installed as a package)"
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="survey",
         description="Multi-SDR RF landscape surveying (receive-only, always)")
     p.add_argument("--config", help="site config YAML")
+    p.add_argument("--version", action="version",
+                   version="rf-survey %s" % _version())
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("doctor", help="check deps and hardware, print fix hints")
