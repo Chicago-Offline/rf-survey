@@ -75,6 +75,28 @@ references:
     bandwidth_hz: 200000
     notes: Second FM anchor; same caveats as WBEZ.
 
+  - id: fm-wnur-893
+    name: WNUR-FM 89.3 (Northwestern, Evanston)
+    freq_hz: 89300000
+    band: fm-broadcast
+    kind: broadcast
+    expect: very_strong
+    modulation: wfm
+    bandwidth_hz: 200000
+    source: https://transition.fcc.gov/fcc-bin/fmq?call=WNUR
+    notes: >
+      Closest licensed transmitter to the Evanston observer: FCC facility
+      49779 at 42.053361/-87.675889, roughly 1.3 km from the frontline site
+      versus ~21 km to the Willis Tower cluster.
+      7.2 kW ERP horizontal AND vertical.  The vertical component is the
+      point: a whip is vertically polarised and most FM broadcast is not,
+      so this couples into an HT antenna far better than WBEZ does.
+      Sits in the reserved 88-92 educational sub-band, so its shoulders are
+      less crowded than 91.5's, giving a cleaner noise median.
+      Diagnostic: if a 7.2 kW vertical signal 1.3 km away does NOT read well
+      above the distant FM anchors, then the FM readings are stray coupling
+      into the front end rather than genuine antenna capture.
+
   - id: nws-kzz81
     name: NWS Lockport KZZ-81
     freq_hz: 162425000
