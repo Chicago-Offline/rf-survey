@@ -291,7 +291,9 @@ def auto_devices(devs, existing_devices=None):
     took the trouble to measure -- that would turn verified coverage back
     into 'unverified' and quietly devalue their existing observations.
     """
-    existing_devices = existing_devices or {}
+    # Coerce existing_devices keys to str: hand-written configs leave all-digit
+    # serials unquoted, so YAML loads them as int and the lookup misses.
+    existing_devices = {str(k): v for k, v in (existing_devices or {}).items()}
     configured = {}
     for d in devs:
         serial = d["serial"]
