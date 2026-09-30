@@ -40,7 +40,9 @@ def _default_serial(cfg):
     Refuse to guess past that: picking one of several receivers silently
     would attribute observations to the wrong antenna.
     """
-    serials = list((cfg.get("devices") or {}).keys())
+    # str(): a hand-written config may leave an all-digit serial unquoted,
+    # which YAML loads as an int.
+    serials = [str(s) for s in (cfg.get("devices") or {}).keys()]
     if len(serials) == 1:
         return serials[0]
     return None

@@ -235,17 +235,71 @@ def _describe_devices(devs):
         _out("  then unplug and replug it.")
 
 
-def auto_devices(devs):
+def load_existing(config_path):
+    """Whatever is already in the config, or {} if there is nothing usable.
+
+    Setup is not only a first-run tool: people re-run it after changing
+    antennas or moving a receiver.  Re-running must never quietly downgrade
+    a config that already holds more than the quick path asks for.
+    """
+    path = os.path.expanduser(config_path)
+    if not os.path.exists(path):
+        return {}
+    try:
+        import yaml
+        with open(path) as fh:
+            data = yaml.safe_load(fh)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def existing_station_id(existing):
+    value = (existing.get("station") or {}).get("id")
+    return value if isinstance(value, str) and value else None
+
+
+def existing_location(existing):
+    loc = existing.get("location")
+    if not isinstance(loc, dict):
+        return None
+    if loc.get("mode") == "static" and loc.get("lat") is not None:
+        return loc
+    if loc.get("mode") == "gpsd":
+        return loc
+    return None
+
+
+def describe_location(loc):
+    if loc.get("mode") == "gpsd":
+        return "gpsd at %s:%s" % (loc.get("host"), loc.get("port"))
+    text = "%s, %s" % (_num(loc["lat"]), _num(loc["lon"]))
+    if loc.get("alt_m") is not None:
+        text += " at %s m" % _num(loc["alt_m"])
+    return text
+
+
+def auto_devices(devs, existing_devices=None):
     """Receiver config with no questions asked.
 
     Role comes from the tuner (devices_mod.TUNER_ROLES), gain from a sane
     default.  No antenna key: coverage stays honestly 'unverified' until
     someone runs survey setup --advanced or edits the config.
+
+    A receiver already described in the config is carried over untouched.
+    Re-running the quick path must not silently strip an antenna someone
+    took the trouble to measure -- that would turn verified coverage back
+    into 'unverified' and quietly devalue their existing observations.
     """
+    existing_devices = existing_devices or {}
     configured = {}
     for d in devs:
         serial = d["serial"]
         if not serial:
+            continue
+        prior = existing_devices.get(serial)
+        if isinstance(prior, dict) and prior.get("role"):
+            configured[serial] = prior
             continue
         tuner = _tuner_of(d)
         configured[serial] = {
@@ -303,9 +357,14 @@ def step_system(skip=False):
         devs = _scan_devices()
 
 
-def step_location(step=2):
+def step_location(step=2, prior=None):
     """The one fact that turns a hit into evidence: where the receiver is."""
     _heading(step, "Where is this receiver?")
+    if prior:
+        _out("  Currently recorded: %s" % describe_location(prior))
+        if ask_yes_no("  Still accurate? Keep it", default=True):
+            return prior
+        _out()
     _out("  Without a location an observation is just a frequency. Street")
     _out("  address precision is not needed -- the block is plenty.")
     _out()
@@ -313,7 +372,7 @@ def step_location(step=2):
     return {"mode": "static", "lat": lat, "lon": lon}
 
 
-def step_profile(step=3):
+def step_profile(step=3, prior=None):
     """Pick a bundled survey profile (plan)."""
     _heading(step, "What should it listen to?")
     catalog = plans_mod.bundled_catalog()
@@ -324,9 +383,11 @@ def step_profile(step=3):
     _out("  A profile is a ready-made scan plan: bands, dwell times and")
     _out("  decoders. You can switch profiles any time; nothing here locks in.")
     _out()
+    names = [name for name, _p, _d in catalog]
+    default_index = names.index(prior) if prior in names else 0
     labels = ["%-13s %s" % (name, desc or "") for name, _p, desc in catalog]
     index = ask_choice("  Profiles shipped with rf-survey:", labels,
-                       default_index=0)
+                       default_index=default_index)
     return catalog[index][0]
 
 
@@ -511,7 +572,7 @@ def _bands(bands):
 def _device_template(prefix, serial="BENCH"):
     """Commented device block used for both 'no device' and 'no antenna'."""
     return [
-        "%s%s:" % (prefix, serial),
+        '%s"%s":' % (prefix, serial),
         "%s  role: digital" % prefix,
         "%s  gain: 49.6" % prefix,
         "%s  antenna:" % prefix,
@@ -596,7 +657,9 @@ def render_config(station_id, location, device_cfg, db_path, key_path,
     for serial, dev in device_cfg.items():
         ant = dev.get("antenna")
         place = dev.get("placement")
-        add("  %s:" % serial)
+        # Quoted: an all-digit serial (81388637) otherwise loads as an int
+        # and never matches the string passed to --serial.
+        add('  "%s":' % serial)
         add("    role: %s" % dev["role"])
         add("    gain: %s" % _num(dev["gain"]))
         if ant:
@@ -697,9 +760,20 @@ def run(config_path=None, skip_checks=False, advanced=False):
     TOTAL_STEPS = ADVANCED_STEPS if advanced else QUICK_STEPS
 
     config_path = config_path or config_mod.DEFAULT_CONFIG
+    existing = load_existing(config_path)
+    prior_id = existing_station_id(existing)
+    prior_loc = existing_location(existing)
+    prior_devices = existing.get("devices") if isinstance(
+        existing.get("devices"), dict) else {}
+    prior_plan = existing.get("plan") if isinstance(
+        existing.get("plan"), str) else None
 
     _out()
     _out("rf-survey setup")
+    if existing:
+        _out("Found an existing config at %s."
+             % os.path.expanduser(config_path))
+        _out("Anything already set is kept unless you change it here.")
     if advanced:
         _out("Advanced mode: observer ID, location source, and the antenna")
         _out("details for every receiver.")
@@ -718,10 +792,10 @@ def run(config_path=None, skip_checks=False, advanced=False):
         ok, devs = step_system(skip=skip_checks)
         if not ok:
             return 1
-        station_id = _default_station_id()
-        location = step_location(step=2)
-        plan_name = step_profile(step=3)
-        device_cfg = auto_devices(devs)
+        station_id = prior_id or _default_station_id()
+        location = step_location(step=2, prior=prior_loc)
+        plan_name = step_profile(step=3, prior=prior_plan)
+        device_cfg = auto_devices(devs, prior_devices)
 
     text = render_config(station_id, location, device_cfg,
                          DEFAULT_DB, DEFAULT_KEY, plan_name=plan_name)
@@ -767,19 +841,27 @@ def run(config_path=None, skip_checks=False, advanced=False):
     _out()
 
     if not advanced:
-        _out("  Defaults chosen for you (all editable in %s):"
+        _out("  Settings you did not pick (all editable in %s):"
              % os.path.expanduser(config_path))
-        _out("      observer ID  %s" % station_id)
+        _out("      observer ID  %s%s"
+             % (station_id, " (kept)" if prior_id else " (from hostname)"))
         if serial:
+            dev = device_cfg[serial]
             _out("      receiver     %s, role %s, gain %s"
-                 % (serial, device_cfg[serial]["role"],
-                    _num(device_cfg[serial]["gain"])))
-        _out("      antenna      not described -> coverage 'unverified'")
-        _out()
-        _out("  Optional, and worth it once you settle on an install:")
-        _out("      survey setup --advanced    describe the antenna, so a")
-        _out("                                 silent channel can be told")
-        _out("                                 apart from one you cannot hear")
+                 % (serial, dev["role"], _num(dev["gain"])))
+            if dev.get("antenna"):
+                _out("      antenna      %s (kept from your config)"
+                     % dev["antenna"].get("model", "described"))
+            else:
+                _out("      antenna      not described -> coverage "
+                     "'unverified'")
+        if not any(d.get("antenna") for d in device_cfg.values()):
+            _out()
+            _out("  Optional, and worth it once you settle on an install:")
+            _out("      survey setup --advanced    describe the antenna, so a")
+            _out("                                 silent channel can be told")
+            _out("                                 apart from one you cannot "
+                 "hear")
         _out()
 
     _out("  Other useful commands:")

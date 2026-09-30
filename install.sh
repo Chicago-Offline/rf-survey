@@ -18,7 +18,9 @@ REPO_URL="${RFS_REPO:-https://github.com/Chicago-Offline/rf-survey.git}"
 REF="${RFS_REF:-main}"
 RUN_SETUP="${RFS_SETUP:-1}"
 NO_SUDO="${RFS_NO_SUDO:-0}"
-VENV_HOME="$HOME/.local/share/rf-survey/venv"
+# Deliberately NOT under ~/.local/share/rf-survey -- that directory is the
+# observation data dir (observations.db lives there). Keep code out of it.
+VENV_HOME="$HOME/.local/opt/rf-survey/venv"
 
 if [ -t 1 ]; then
   B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; Z=$'\033[0m'
