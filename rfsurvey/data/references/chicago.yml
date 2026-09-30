@@ -75,6 +75,77 @@ references:
     bandwidth_hz: 200000
     notes: Second FM anchor; same caveats as WBEZ.
 
+  - id: fm-wnur-893
+    name: WNUR-FM 89.3 (Northwestern, Evanston)
+    freq_hz: 89300000
+    band: fm-broadcast
+    kind: broadcast
+    expect: very_strong
+    modulation: wfm
+    bandwidth_hz: 200000
+    source: https://transition.fcc.gov/fcc-bin/fmq?call=WNUR
+    notes: >
+      Closest licensed transmitter to the Evanston observer: FCC facility
+      49779 at 42.053361/-87.675889, roughly 1.3 km from the frontline site
+      versus ~21 km to the Willis Tower cluster.
+      7.2 kW ERP horizontal AND vertical.  The vertical component is the
+      point: a whip is vertically polarised and most FM broadcast is not,
+      so this couples into an HT antenna far better than WBEZ does.
+      Sits in the reserved 88-92 educational sub-band, so its shoulders are
+      less crowded than 91.5's, giving a cleaner noise median.
+      Diagnostic: if a 7.2 kW vertical signal 1.3 km away does NOT read well
+      above the distant FM anchors, then the FM readings are stray coupling
+      into the front end rather than genuine antenna capture.
+
+  - id: nws-kzz81
+    name: NWS Lockport KZZ-81
+    freq_hz: 162425000
+    band: vhf-high
+    kind: continuous
+    expect: strong
+    modulation: nfm
+    bandwidth_hz: 16000
+    source: https://www.weather.gov/lot/nwr
+    notes: >
+      NOAA Weather Radio, 1000 W from Lockport -- the highest-power NWR
+      transmitter listing Cook County in its coverage area, 3.3x KWO39's
+      ERP.  Cross-check against nws-kwo39: if Lockport is heard and Chicago
+      is not, the fault is that transmitter or its path, not the receiver.
+
+  - id: nws-kxi41
+    name: NWS Crystal Lake KXI-41
+    freq_hz: 162500000
+    band: vhf-high
+    kind: continuous
+    expect: strong
+    modulation: nfm
+    bandwidth_hz: 16000
+    source: https://www.weather.gov/lot/nwr
+    notes: >
+      NOAA Weather Radio, 300 W from Crystal Lake, lists Cook in its
+      coverage area.  Third VHF-high anchor.  Three independent NWR
+      transmitters mean a deaf receiver cannot be mistaken for a quiet band.
+
+  - id: atsc-wgn-rf19
+    name: WGN-TV RF 19 ATSC 1.0 pilot
+    freq_hz: 500309440
+    band: uhf
+    kind: continuous
+    expect: very_strong
+    modulation: cw
+    bandwidth_hz: 10000
+    source: https://transition.fcc.gov/fcc-bin/tvq?call=WGN
+    notes: >
+      8VSB pilot tone, 0.30944 MHz above the RF 19 lower edge (500 MHz).
+      FCC licence record: facility 72115, 645 kW ERP, Willis Tower, and
+      "ATSC 3.0 (Nextgen TV)? No" -- confirmed 1.0, so the pilot exists.
+      A pure CW tone sitting in an otherwise flat 8VSB data floor: keep
+      bandwidth_hz narrow so the shoulders stay inside the data block and
+      the pilot reads well above it.
+      Do NOT copy this pattern to WBBM RF 12 -- that station is ATSC 3.0
+      (OFDM, facility 9617) and has no pilot carrier at all.  A reference
+      at 204.309 would measure nothing and poison its own baseline.
+
 # ---------------------------------------------------------------------------
 # UHF (ATSC pilot tones) -- NOT YET POPULATED.  See NETWORK.md S7.
 #
