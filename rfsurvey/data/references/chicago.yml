@@ -75,6 +75,55 @@ references:
     bandwidth_hz: 200000
     notes: Second FM anchor; same caveats as WBEZ.
 
+  - id: nws-kzz81
+    name: NWS Lockport KZZ-81
+    freq_hz: 162425000
+    band: vhf-high
+    kind: continuous
+    expect: strong
+    modulation: nfm
+    bandwidth_hz: 16000
+    source: https://www.weather.gov/lot/nwr
+    notes: >
+      NOAA Weather Radio, 1000 W from Lockport -- the highest-power NWR
+      transmitter listing Cook County in its coverage area, 3.3x KWO39's
+      ERP.  Cross-check against nws-kwo39: if Lockport is heard and Chicago
+      is not, the fault is that transmitter or its path, not the receiver.
+
+  - id: nws-kxi41
+    name: NWS Crystal Lake KXI-41
+    freq_hz: 162500000
+    band: vhf-high
+    kind: continuous
+    expect: strong
+    modulation: nfm
+    bandwidth_hz: 16000
+    source: https://www.weather.gov/lot/nwr
+    notes: >
+      NOAA Weather Radio, 300 W from Crystal Lake, lists Cook in its
+      coverage area.  Third VHF-high anchor.  Three independent NWR
+      transmitters mean a deaf receiver cannot be mistaken for a quiet band.
+
+  - id: atsc-wgn-rf19
+    name: WGN-TV RF 19 ATSC 1.0 pilot
+    freq_hz: 500309440
+    band: uhf
+    kind: continuous
+    expect: very_strong
+    modulation: cw
+    bandwidth_hz: 10000
+    source: https://transition.fcc.gov/fcc-bin/tvq?call=WGN
+    notes: >
+      8VSB pilot tone, 0.30944 MHz above the RF 19 lower edge (500 MHz).
+      FCC licence record: facility 72115, 645 kW ERP, Willis Tower, and
+      "ATSC 3.0 (Nextgen TV)? No" -- confirmed 1.0, so the pilot exists.
+      A pure CW tone sitting in an otherwise flat 8VSB data floor: keep
+      bandwidth_hz narrow so the shoulders stay inside the data block and
+      the pilot reads well above it.
+      Do NOT copy this pattern to WBBM RF 12 -- that station is ATSC 3.0
+      (OFDM, facility 9617) and has no pilot carrier at all.  A reference
+      at 204.309 would measure nothing and poison its own baseline.
+
 # ---------------------------------------------------------------------------
 # UHF (ATSC pilot tones) -- NOT YET POPULATED.  See NETWORK.md S7.
 #
