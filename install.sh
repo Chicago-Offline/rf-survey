@@ -123,25 +123,51 @@ if [ "$OS" = "Linux" ]; then
 fi
 
 # ------------------------------------------------------------ rf-survey ------
-SPEC="git+${REPO_URL}@${REF}#egg=rf-survey[submit]"
+# PEP 508 direct-reference syntax. The older '#egg=name[extra]' fragment is
+# rejected outright by current pip/uv resolvers.
+SPEC="rf-survey[submit] @ git+${REPO_URL}@${REF}"
+
+LOG="$(mktemp -t rfs-install.XXXXXX)"
+trap 'rm -f "$LOG"' EXIT
+
+install_failed() {
+  printf '%s\n' "$(cat "$LOG")" >&2
+  die "$1"
+}
 
 if have pipx; then
   say "pipx install rf-survey ($REF)"
-  pipx install --force "$SPEC"
+  # Do NOT trust the exit status alone: pipx has been seen printing a fatal
+  # spec error and still exiting 0, which previously left a stale install in
+  # place while this script cheerfully reported success.
+  if ! pipx install --force "$SPEC" >"$LOG" 2>&1; then
+    install_failed "pipx install failed"
+  fi
+  cat "$LOG"
+  if grep -qiE 'invalid-egg|Cannot determine package name|^error' "$LOG"; then
+    die "pipx reported an error installing rf-survey (output above)"
+  fi
   pipx ensurepath >/dev/null 2>&1 || true
   BIN="$HOME/.local/bin/survey"
 else
   say "no pipx -- installing into $VENV_HOME"
   mkdir -p "$(dirname "$VENV_HOME")"
   [ -d "$VENV_HOME" ] || python3 -m venv "$VENV_HOME"
-  "$VENV_HOME/bin/pip" install --upgrade pip >/dev/null
-  "$VENV_HOME/bin/pip" install --upgrade "$SPEC"
+  "$VENV_HOME/bin/pip" install --upgrade pip >"$LOG" 2>&1 \
+    || install_failed "could not upgrade pip in $VENV_HOME"
+  "$VENV_HOME/bin/pip" install --upgrade "$SPEC" >"$LOG" 2>&1 \
+    || install_failed "pip install failed"
+  cat "$LOG"
   mkdir -p "$HOME/.local/bin"
   ln -sf "$VENV_HOME/bin/survey" "$HOME/.local/bin/survey"
   BIN="$HOME/.local/bin/survey"
 fi
 
+# An existing binary proves nothing -- an older install satisfies -x just as
+# well as a fresh one. Require that it actually runs.
 [ -x "$BIN" ] || die "install finished but $BIN is missing"
+"$BIN" --version >/dev/null 2>&1 \
+  || die "$BIN exists but will not run; the install did not take"
 ok "installed $("$BIN" --version 2>/dev/null || echo rf-survey)"
 
 # PATH nudge -- append to the shell rc only if ~/.local/bin is not already on PATH.
