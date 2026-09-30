@@ -34,10 +34,43 @@ def cmd_devices(args, cfg):
     return 0
 
 
+def _default_serial(cfg):
+    """The configured receiver, when there is exactly one.
+
+    Refuse to guess past that: picking one of several receivers silently
+    would attribute observations to the wrong antenna.
+    """
+    serials = list((cfg.get("devices") or {}).keys())
+    if len(serials) == 1:
+        return serials[0]
+    return None
+
+
 def cmd_run(args, cfg):
     from . import engine
+
+    plan_arg = args.plan or cfg.get("plan")
+    if not plan_arg:
+        print("error: no plan given and no 'plan:' in the config.\n"
+              "       run: survey plans      (then: survey run <name>)\n"
+              "       or:  survey setup      (to pick a default profile)",
+              file=sys.stderr)
+        return 1
+
+    serial = args.serial or _default_serial(cfg)
+    if not serial:
+        configured = list((cfg.get("devices") or {}).keys())
+        if configured:
+            print("error: several receivers are configured; pick one with "
+                  "--serial\n       " + ", ".join(configured), file=sys.stderr)
+        else:
+            print("error: no receiver configured. Run: survey devices\n"
+                  "       then add it to the config, or run: survey setup",
+                  file=sys.stderr)
+        return 1
+
     try:
-        plan_path = plans_mod.resolve(args.plan)
+        plan_path = plans_mod.resolve(plan_arg)
     except plans_mod.PlanError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -45,7 +78,7 @@ def cmd_run(args, cfg):
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     try:
-        engine.run(cfg, plan, args.serial, force=args.force,
+        engine.run(cfg, plan, serial, force=args.force,
                    max_passes=args.passes)
     except devices.DeviceError as e:
         print(f"device error: {e}", file=sys.stderr)
@@ -128,6 +161,7 @@ def cmd_setup(args, cfg):
         return setup_wizard.run(
             config_path=args.config,
             skip_checks=args.skip_checks,
+            advanced=args.advanced,
         )
     except setup_wizard.SetupError as e:
         print(f"setup error: {e}", file=sys.stderr)
@@ -369,9 +403,12 @@ def main(argv=None):
     sub.add_parser("devices", help="list SDRs by serial, role, busy state")
 
     r = sub.add_parser("run", help="run a scan plan on one device")
-    r.add_argument("plan",
-                   help="plan file path OR bundled plan name (uhf-dmr, 2m-fm, chicago-ham)")
-    r.add_argument("--serial", required=True, help="device serial (not index)")
+    r.add_argument("plan", nargs="?", default=None,
+                   help="plan file path OR bundled plan name (uhf-dmr, 2m-fm, "
+                        "chicago-ham); default: 'plan:' from the config")
+    r.add_argument("--serial", default=None,
+                   help="device serial (not index); default: the configured "
+                        "receiver when exactly one is configured")
     r.add_argument("--passes", type=int, default=None,
                    help="stop after N passes (default: plan's setting; 0=forever)")
     r.add_argument("--force", action="store_true",
@@ -421,9 +458,13 @@ def main(argv=None):
     ms.add_argument("--receiver", help="filter by device serial")
     ms.add_argument("--json", action="store_true")
 
-    su = sub.add_parser("setup", help="first-run wizard: deps, hardware, config")
+    su = sub.add_parser("setup",
+                        help="first-run wizard: location + profile, then go")
     su.add_argument("--skip-checks", action="store_true",
                     help="skip dependency check (still runs hardware scan)")
+    su.add_argument("--advanced", action="store_true",
+                    help="also ask for observer ID, location source, and "
+                         "per-receiver antenna details")
 
     args = p.parse_args(argv)
     cfg = config.load_config(args.config)

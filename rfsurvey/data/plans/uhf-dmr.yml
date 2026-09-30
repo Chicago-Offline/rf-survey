@@ -1,5 +1,6 @@
 # UHF business/industrial DMR hunt
 name: uhf-dmr
+description: UHF business/industrial DMR hunt (450-470 MHz), runs until stopped
 bands:
   - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25}
 sweep:

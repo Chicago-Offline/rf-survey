@@ -11,32 +11,62 @@ entries.
 
 ## Quick start
 
-**Requirements:** Python 3.9+, an RTL-SDR dongle.
+**Requirements:** an RTL-SDR dongle, macOS or Raspberry Pi OS / Debian / Ubuntu.
+
+Plug in the dongle, then run:
 
 ```bash
-# 1. Install rtl-sdr tools (Debian/Ubuntu)
-sudo apt install -y rtl-sdr
+curl -fsSL https://raw.githubusercontent.com/Chicago-Offline/rf-survey/main/install.sh | bash
+```
 
-# On macOS
-brew install rtl-sdr
+That installs the rtl-sdr userland, puts `survey` on your PATH, and starts
+setup. Re-running it is safe — every step is idempotent.
 
-# 2. Install rf-survey
+Setup asks **two questions**: where the receiver is, and what to listen to.
+Everything else is detected. Then:
+
+```bash
+survey run        # uses the profile and receiver from your config
+survey report     # see what it heard
+```
+
+<details>
+<summary>What the installer does, and how to steer it</summary>
+
+- **macOS** — `brew install rtl-sdr coreutils pipx` (Homebrew must already be
+  installed).
+- **Debian / Raspberry Pi OS** — `apt-get install rtl-sdr coreutils procps
+  python3-venv python3-pip` (plus `pipx` where packaged), and blacklists the
+  kernel DVB-T driver that otherwise grabs the dongle
+  (`usb_claim_interface error -6`). The blacklist is appended to its own file
+  and skipped if anything already covers it.
+- Installs rf-survey with `pipx`, falling back to a venv under
+  `~/.local/share/rf-survey` on older releases without pipx.
+
+Environment knobs:
+
+| Variable | Effect |
+|----------|--------|
+| `RFS_REF=<branch\|tag>` | install a ref other than `main` |
+| `RFS_REPO=<git url>` | install from a different repo or fork |
+| `RFS_SETUP=0` | install only, do not launch the wizard |
+| `RFS_NO_SUDO=1` | never call sudo; print the apt command instead |
+
+</details>
+
+### Manual install
+
+```bash
 pipx install git+https://github.com/Chicago-Offline/rf-survey
-
-# 3. Plug in your RTL-SDR, then run the setup wizard
 survey setup
 ```
 
 > **PEP 668 note:** On Debian 12+ and Ubuntu 22.04+ `pip install` into the
-> system Python is blocked. Use `pipx` as shown above — it creates an
-> isolated environment automatically. Install pipx with `sudo apt install pipx`.
+> system Python is blocked. Use `pipx` — it creates an isolated environment
+> automatically. Install pipx with `sudo apt install pipx`.
 
-The wizard checks your dependencies, detects the dongle, asks a few
-questions (observer ID, location, antenna), writes
-`~/.config/rf-survey/config.yml`, and prints the exact `survey run`
-command to start scanning.
-
-### Manual install (repo checkout / development)
+<details>
+<summary>Repo checkout / development</summary>
 
 ```bash
 git clone https://github.com/Chicago-Offline/rf-survey
@@ -46,7 +76,35 @@ pip install -e .
 survey setup
 ```
 
-### Bundled survey plans
+</details>
+
+## Setup
+
+```bash
+survey setup              # two questions: location, profile
+survey setup --advanced   # observer ID, gpsd, per-receiver antenna details
+```
+
+Setup writes `~/.config/rf-survey/config.yml` — commented, and meant to be
+edited by hand afterwards. It picks the observer ID from the hostname, and the
+tuner role and gain from the detected dongle.
+
+### Antenna details are optional
+
+The quick path does **not** ask about your antenna, and that costs you nothing
+up front. An undescribed antenna records coverage as `unverified` — an honest
+unknown, not an error. Surveying works normally.
+
+Describing it is worth doing once your install settles, because it is what
+lets a beacon check tell **real silence** apart from **a frequency this antenna
+was never going to hear**. Run `survey setup --advanced`, or fill in the
+commented `antenna:` block in the config.
+
+⚠️ `bands_mhz` is the antenna's **usable receive reach**, not its resonant
+band. Overstate it and silence on an unhearable frequency gets scored as a real
+negative.
+
+### Bundled survey profiles
 
 | Name | Description |
 |------|-------------|
@@ -54,11 +112,18 @@ survey setup
 | `chicago-ham` | Chicago 2 m + 70 cm amateur repeater discovery (FM) |
 | `2m-fm` | 2 m amateur FM activity survey |
 
+Setup stores your choice as `plan:` in the config, so `survey run` needs no
+arguments. Both can still be overridden:
+
 ```bash
-survey plans                       # list bundled plans
-survey run uhf-dmr --serial BENCH  # run by name (no path needed)
-survey run 2m-fm   --serial BENCH
+survey plans                       # list bundled profiles
+survey run                         # config default profile + receiver
+survey run uhf-dmr                 # override the profile
+survey run 2m-fm --serial BENCH    # override both
 ```
+
+`--serial` is only required when more than one receiver is configured —
+rf-survey will not guess which antenna a scan belongs to.
 
 ### Other useful commands
 
