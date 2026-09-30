@@ -271,6 +271,25 @@ def due_targets(store, receiver, targets, now=None):
     return [t for _w, t in out]
 
 
+def next_due_in(store, receiver, targets, now=None):
+    """Seconds until the soonest target comes due; 0 if one already is.
+
+    Only meaningful for monitor-only plans, where nothing else paces the
+    engine loop.  A never-checked target is due now.
+    """
+    if not targets:
+        return 0.0
+    now = now or time.time()
+    last = store.last_checked(receiver)
+    waits = []
+    for t in targets:
+        seen = last.get((t["freq_hz"], t["name"]), 0)
+        if not seen:
+            return 0.0
+        waits.append((seen + t["interval_s"]) - now)
+    return max(0.0, min(waits))
+
+
 def run_due(index, store, receiver, targets, fix_provider, gain=None,
             budget_s=120, now=None):
     """Check as many due targets as fit in the airtime budget.

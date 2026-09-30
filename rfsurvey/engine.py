@@ -73,7 +73,15 @@ def run(cfg, plan, serial, force=False, max_passes=None):
     # Airtime reference for the monitor budget: the first pass has no
     # measured sweep time yet, so assume 4 min and correct from pass 2 on.
     last_sweep_s = None
-    if mon_targets:
+    # A plan with no bands is monitor-only: targeted checks of known
+    # channels, no discovery sweep.  config.load_plan guarantees such a
+    # plan has targets, and pins monitor.budget_s (duty_pct has no
+    # referent without a sweep to take a share of).
+    monitor_only = not plan["bands"]
+    if mon_targets and monitor_only:
+        log.info("monitor-only: %d known target(s), %.0fs airtime per pass",
+                 len(mon_targets), mon_cfg["budget_s"])
+    elif mon_targets:
         log.info("monitoring %d known target(s) at %d%% duty",
                  len(mon_targets), mon_cfg["duty_pct"])
 
@@ -179,7 +187,19 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                                           bdwell["duration_s"],
                                           bdwell["decoder"],
                                           gated, meta, loc.get())
-            last_sweep_s = time.time() - sweep_t0
+            nap = 0.0
+            if monitor_only:
+                # No sweep means nothing paces the loop: run_due returns
+                # instantly when nothing is due, so the pass loop would
+                # spin at full speed. Sleep to the next due target, capped
+                # so a clock jump or a long-interval list still logs.
+                nap = min(monitor_mod.next_due_in(
+                    store, serial, mon_targets), 60.0)
+            else:
+                last_sweep_s = time.time() - sweep_t0
             if passes and n >= passes:
                 log.info("completed %d passes, exiting cleanly", n)
                 return
+            if nap > 0:
+                log.debug("monitor-only: idle %.0fs to next due target", nap)
+                time.sleep(nap)

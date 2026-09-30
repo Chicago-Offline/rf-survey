@@ -57,6 +57,42 @@ Known pain points (all field-verified):
   (`timeout` built in, supervisor reaps orphans at startup).
 - Concurrent loops: one engine per claimed device; releases scoped per device.
 
+#### Two missions: discovery vs targeted checks
+A plan can do either or both, and they answer different questions.
+
+- **Discovery (`bands:`)** — sweep, gate on SNR over each bin's own
+  median, dwell where energy appears. Finds things we do not know about.
+- **Targeted checks (`monitor:`)** — tune each *known* channel on a
+  schedule and listen regardless of what the sweep thinks. Runs first
+  each pass and is ungated, because the gate cannot see either end of the
+  interesting range: a repeater sitting idle between overs has no energy,
+  and a continuous emitter self-baselines into its own noise estimate.
+  Every check writes a row **including the silent ones**, which is what
+  makes "last heard 3 days ago" distinguishable from "nobody ever
+  looked". `expect:` on a target promotes the check from "was it heard"
+  to "do its catalog parameters hold" (verified / conflict / unverified /
+  no_claim / suspect).
+
+When a plan has both, monitoring takes `duty_pct` of each pass's airtime
+and hands the radio back; it never starves discovery.
+
+**A plan with no `bands:` is monitor-only** — targeted checks and nothing
+else. Use it when another dongle already covers discovery on that
+spectrum, or when the beacon-check *shape* of answer (a row per channel,
+every time) is what's wanted against the real catalog rather than the
+reference beacons. `duty_pct` has no referent without a sweep, so airtime
+is pinned by `monitor.budget_s`, defaulting to one unhurried pass over
+every target; the engine then idles to the next due target instead of
+spinning. `config.load_plan` requires at least one of bands/targets, so a
+plan that would claim a dongle and do nothing fails at startup.
+See `plans/plan-chicago-targeted.yml`.
+
+🔴 Targeted checks report only what a decoder we actually have can
+extract: `nfm` and `dmr`. **No AM, no P25/trunked** — those targets get
+energy and SNR with no parameter verdict, which matters because much of
+this region's public safety is P25. DCS is presence-only (Golay 23,12
+decode not implemented).
+
 ### 4. Decoders (wrapped, not reimplemented)
 - `rtl_power` — spectrum sweep
 - `rtl_fm` + squelch — analog FM dwell / audio logging

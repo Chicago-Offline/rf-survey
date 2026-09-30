@@ -24,7 +24,11 @@ def load_config(path=None):
     return cfg
 
 
-REQUIRED_PLAN_KEYS = ("name", "bands")
+# "bands" is no longer required: a plan may be monitor-only (targeted
+# checks of known channels, no discovery sweep).  load_plan enforces that
+# at least one of bands/monitor targets is present, because a plan with
+# neither would claim a dongle and do nothing.
+REQUIRED_PLAN_KEYS = ("name",)
 
 
 def load_plan(path):
@@ -61,6 +65,11 @@ def load_plan(path):
     plan["dwell"].setdefault("duration_s", 60)
     plan["dwell"].setdefault("decoder", "nfm")
     plan["dwell"].setdefault("squelch_db", 6.0)
+    # No bands = monitor-only plan.  Default to empty so every band loop
+    # below (and in engine.run) degenerates cleanly instead of KeyError.
+    plan.setdefault("bands", [])
+    if plan["bands"] is None:
+        plan["bands"] = []
     for b in plan["bands"]:
         for k in ("start_mhz", "stop_mhz", "step_khz"):
             if k not in b:
@@ -106,6 +115,15 @@ def load_plan(path):
             v = mon[key]
             if not (isinstance(v, (int, float)) and v > 0):
                 raise ConfigError(f"monitor.{key} must be positive: {v!r}")
+        # budget_s pins monitor airtime per pass absolutely, bypassing the
+        # duty_pct share of sweep time.  Required for monitor-only plans
+        # (no sweep exists to take a share of) and allowed elsewhere as an
+        # override.  Validated here so a typo fails at startup.
+        if mon.get("budget_s") is not None:
+            b = mon["budget_s"]
+            if not (isinstance(b, (int, float)) and b > 0):
+                raise ConfigError(
+                    f"monitor.budget_s must be positive: {b!r}")
         dec = mon.get("decoder")
         if dec is not None and dec not in DECODERS:
             raise ConfigError(
@@ -124,4 +142,18 @@ def load_plan(path):
                     f"{t['decoder']!r}")
         mon["resolved"] = targets
     plan["monitor"] = mon
+
+    # A plan must have something to do with the dongle it claims.  Without
+    # this, a monitor-only plan whose target file resolved to nothing (or a
+    # plan that simply forgot "bands") would claim a receiver and spin.
+    if not plan["bands"] and not mon.get("resolved"):
+        raise ConfigError(
+            "plan has no bands and no monitor targets: nothing to do")
+    if not plan["bands"]:
+        # Monitor-only: there is no sweep, so duty_pct has no referent.
+        # Default the budget to one unhurried pass over every target
+        # (per-target dwell + gate overhead) and let the engine idle to
+        # the next due time instead of spinning.
+        mon.setdefault("budget_s", max(
+            60.0, float(sum(t["duration_s"] + 5 for t in mon["resolved"]))))
     return plan

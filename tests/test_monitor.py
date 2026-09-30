@@ -383,5 +383,113 @@ class TestPlanMonitorBlock(unittest.TestCase):
             os.unlink(p)
 
 
+class TestMonitorOnlyPlan(unittest.TestCase):
+    """A plan may skip discovery entirely and only check known channels."""
+
+    def _load(self, body):
+        with tempfile.NamedTemporaryFile("w", suffix=".yml",
+                                         delete=False) as f:
+            f.write(body)
+            p = f.name
+        try:
+            return config.load_plan(p)
+        finally:
+            os.unlink(p)
+
+    MON_ONLY = ("name: targeted\n"
+                "monitor:\n"
+                "  targets:\n"
+                "    - {name: WA9ORC, freq_mhz: 144.75, duration_s: 40}\n"
+                "    - {name: RED Fire, freq_mhz: 154.13, duration_s: 30}\n")
+
+    def test_loads_without_bands(self):
+        plan = self._load(self.MON_ONLY)
+        self.assertEqual(plan["bands"], [])
+        self.assertEqual(len(plan["monitor"]["resolved"]), 2)
+
+    def test_budget_defaults_to_one_full_pass(self):
+        # duty_pct has no referent without a sweep, so the budget must be
+        # pinned: enough airtime to visit every target once.
+        plan = self._load(self.MON_ONLY)
+        self.assertEqual(plan["monitor"]["budget_s"], (40 + 5) + (30 + 5))
+
+    def test_budget_floor(self):
+        plan = self._load("name: t\nmonitor:\n  targets:\n"
+                          "    - {name: A, freq_mhz: 144.75, duration_s: 5}\n")
+        self.assertEqual(plan["monitor"]["budget_s"], 60.0)
+
+    def test_explicit_budget_wins(self):
+        plan = self._load(self.MON_ONLY + "  budget_s: 300\n")
+        self.assertEqual(plan["monitor"]["budget_s"], 300)
+
+    def test_bad_budget_rejected(self):
+        for bad in ("0", "-5", "nope"):
+            with self.assertRaises(ConfigError):
+                self._load(self.MON_ONLY + "  budget_s: %s\n" % bad)
+
+    def test_no_bands_and_no_targets_rejected(self):
+        # Would claim a dongle and do nothing at all.
+        with self.assertRaises(ConfigError) as cm:
+            self._load("name: empty\n")
+        self.assertIn("nothing to do", str(cm.exception))
+
+    def test_empty_targets_list_rejected(self):
+        with self.assertRaises(ConfigError):
+            self._load("name: empty\nmonitor:\n  targets: []\n")
+
+    def test_bands_only_plan_gets_no_budget(self):
+        # Discovery-only plans must keep loading exactly as before.
+        plan = self._load(
+            "name: sweep\nbands:\n"
+            "  - {start_mhz: 450, stop_mhz: 470, step_khz: 6.25}\n")
+        self.assertEqual(plan["monitor"], {})
+
+
+class TestNextDueIn(unittest.TestCase):
+    """Paces the monitor-only loop; without it the engine spins hot."""
+
+    def setUp(self):
+        self.path = tempfile.mktemp(suffix=".db")
+        self.store = Store(self.path)
+        self.rx = "SN1"
+
+    def tearDown(self):
+        if os.path.exists(self.path):
+            os.remove(self.path)
+
+    def _check(self, target, ts):
+        self.store.add_monitor_check(
+            self.rx, target, False, 1.0, {}, {"active": 0}, _FakeFix())
+        self.store.db.execute(
+            "UPDATE monitor_checks SET ts=? WHERE target=?",
+            (ts, target["name"]))
+        self.store.db.commit()
+
+    def test_never_checked_is_due_now(self):
+        t = _t(name="Fresh", interval_s=900)
+        self.assertEqual(
+            monitor.next_due_in(self.store, self.rx, [t]), 0.0)
+
+    def test_no_targets_is_due_now(self):
+        self.assertEqual(monitor.next_due_in(self.store, self.rx, []), 0.0)
+
+    def test_waits_for_soonest_target(self):
+        now = time.time()
+        soon = _t(name="Soon", freq_mhz=144.75, interval_s=600)
+        later = _t(name="Later", freq_mhz=145.11, interval_s=3600)
+        self._check(soon, now - 300)    # 300s left
+        self._check(later, now - 300)   # 3300s left
+        wait = monitor.next_due_in(self.store, self.rx, [soon, later],
+                                   now=now)
+        self.assertAlmostEqual(wait, 300, delta=2)
+
+    def test_overdue_target_returns_zero_not_negative(self):
+        now = time.time()
+        t = _t(name="Overdue", interval_s=600)
+        self._check(t, now - 1200)
+        self.assertEqual(
+            monitor.next_due_in(self.store, self.rx, [t], now=now), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
