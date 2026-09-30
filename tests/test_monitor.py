@@ -1,7 +1,9 @@
 import os, sys, tempfile, time, unittest
+from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from rfsurvey import config, monitor, submit as submit_mod, targets as targets_mod
+from rfsurvey import (config, engine, monitor, submit as submit_mod,
+                      targets as targets_mod)
 from rfsurvey.config import ConfigError
 from rfsurvey.store import Store
 from rfsurvey.location import Fix
@@ -489,6 +491,103 @@ class TestNextDueIn(unittest.TestCase):
         self._check(t, now - 1200)
         self.assertEqual(
             monitor.next_due_in(self.store, self.rx, [t], now=now), 0.0)
+
+
+class TestMonitorOnlyEngineLoop(unittest.TestCase):
+    """The engine loop must not spin when there is no sweep to pace it."""
+
+    MON_ONLY = ("name: paced\n"
+                "sweep:\n  passes: 3\n"
+                "monitor:\n"
+                "  budget_s: 60\n"
+                "  targets:\n"
+                "    - {name: A, freq_mhz: 144.75}\n"
+                "    - {name: B, freq_mhz: 462.55}\n")
+
+    WITH_BANDS = ("name: both\n"
+                  "sweep:\n  passes: 2\n"
+                  "bands:\n"
+                  "  - {start_mhz: 450, stop_mhz: 452, step_khz: 12.5}\n"
+                  "monitor:\n"
+                  "  targets:\n"
+                  "    - {name: A, freq_mhz: 144.75}\n")
+
+    def _plan(self, body):
+        with tempfile.NamedTemporaryFile("w", suffix=".yml",
+                                         delete=False) as f:
+            f.write(body)
+            p = f.name
+        try:
+            return config.load_plan(p)
+        finally:
+            os.unlink(p)
+
+    def _run(self, plan):
+        """Run the engine loop with the radio and the clock stubbed out."""
+        db = tempfile.mktemp(suffix=".db")
+        cfg = {"db": db, "location": {"mode": "static", "lat": 41.9,
+                                      "lon": -87.6, "alt_m": 190},
+               "devices": {"SN1": {"gain": 36}}}
+        calls = {"sweeps": 0, "monitor": 0, "sleeps": []}
+
+        class _Claim:
+            index = 0
+
+            def __init__(self, *a, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def _run_due(*a, **kw):
+            calls["monitor"] += 1
+            return (2, 0, 0)
+
+        def _sweep(*a, **kw):
+            calls["sweeps"] += 1
+            return []
+
+        try:
+            with mock.patch.object(engine.devices, "Claim", _Claim), \
+                 mock.patch.object(engine.monitor_mod, "run_due", _run_due), \
+                 mock.patch.object(engine.sweep, "run_rtl_power", _sweep), \
+                 mock.patch.object(engine.monitor_mod, "next_due_in",
+                                   lambda *a, **kw: 540.0), \
+                 mock.patch.object(engine.time, "sleep",
+                                   lambda s: calls["sleeps"].append(s)):
+                engine.run(cfg, plan, "SN1")
+        finally:
+            if os.path.exists(db):
+                os.remove(db)
+        return calls
+
+    def test_monitor_only_never_sweeps(self):
+        calls = self._run(self._plan(self.MON_ONLY))
+        self.assertEqual(calls["sweeps"], 0)
+        self.assertEqual(calls["monitor"], 3)   # sweep.passes: 3
+
+    def test_monitor_only_idles_between_passes(self):
+        # Without this the loop would burn a core re-asking run_due for
+        # targets that are not due for another nine minutes.
+        calls = self._run(self._plan(self.MON_ONLY))
+        self.assertTrue(calls["sleeps"], "monitor-only loop did not idle")
+        # Capped at 60s even though next_due_in said 540s, so a plan edit
+        # or clock jump is still noticed promptly.
+        self.assertTrue(all(0 < s <= 60.0 for s in calls["sleeps"]),
+                        calls["sleeps"])
+
+    def test_last_pass_does_not_idle_before_exiting(self):
+        calls = self._run(self._plan(self.MON_ONLY))
+        self.assertEqual(len(calls["sleeps"]), 2)   # 3 passes, 2 gaps
+
+    def test_plan_with_bands_still_sweeps_and_does_not_idle(self):
+        calls = self._run(self._plan(self.WITH_BANDS))
+        self.assertEqual(calls["sweeps"], 2)
+        self.assertEqual(calls["monitor"], 2)
+        self.assertEqual(calls["sleeps"], [])
 
 
 if __name__ == "__main__":
