@@ -1,0 +1,76 @@
+# Evanston targeted-check plan -- MONITOR ONLY, no discovery sweep.
+#
+# Evanston Fire + NSEA GMRS + ham repeaters within 15 mi of downtown
+# Evanston (42.045, -87.688), plus the two national simplex calling
+# frequencies.
+#
+# Sibling of plans/plan-chicago-targeted.yml; see that file and PLAN.md
+# for why targeted checks exist at all (short version: the discovery
+# gate cannot see an idle repeater, and a continuous emitter
+# self-baselines into its own noise floor, so neither ever trips a
+# dwell -- targeted checks tune and listen regardless, and a silent
+# target still writes a "checked, nothing there" row).
+#
+# 🔴 Repeater targets are the OUTPUT leg (downlink), e.g. WA9ORC 2m is
+# 146.760 and 70cm is 443.750, NOT their 146.160 / 448.750 inputs.  An
+# observer parked on an input hears only nearby users' uplinks and never
+# the machine itself, so an input-pointed target reads dead no matter
+# how busy the repeater is.  tools/gen_targets.py takes the rx leg for
+# exactly this reason -- rx is radio-centric in ssrf-lite (what your
+# radio receives).
+#
+# 🔴 Reporting limits, unchanged from the Chicago plan: decoders are
+# nfm and dmr only.  No AM, no P25.  That bites twice here --
+#   * WA9ORC 146.760 and 443.750 are mixed-mode FM + P25 (NAC 293), so
+#     the P25 traffic on them will show as a signal with no decode.
+#   * Evanston Fire is conventional analog FM, which we CAN grade, but
+#     any P25 neighbours in the same list could not be.
+# DCS is presence-only (Golay 23,12 decode not implemented).
+#
+# Run:
+#   survey --config ~/.config/rf-survey/config.yml \
+#          run --serial SONDE plans/plan-evanston-targeted.yml
+# Read back:
+#   survey --config ~/.config/rf-survey/config.yml \
+#          monitor-status --plan plans/plan-evanston-targeted.yml
+name: evanston-targeted
+
+# No "bands:" key -- that is what makes this monitor-only.
+
+monitor:
+  interval_s: 600
+  duration_s: 20
+  squelch_db: 6.0
+  decoder: nfm
+
+  # 21 targets x (20s dwell + ~5s gate) = ~525s for a full lap.  Pinned
+  # below that on purpose: priority ordering then decides who gets seen
+  # each pass, so the fire channels and the calling frequencies come
+  # around more often than the far ham machines.
+  budget_s: 420
+
+  targets_file:
+    - targets-evanston-fd.yml     # 3 ch, Evanston FD, priority 1
+    - targets-nsea-gmrs.yml       # 4 NSEA GMRS repeaters, priority 1
+    - targets-ham-evanston.yml    # 12 ham repeaters <=15 mi, priority 2
+
+  # National simplex calling frequencies.  Deliberately inline rather
+  # than generated: these are not a "system" in ssrf-lite (no licensee,
+  # no station, no site), they are FCC/ARRL band-plan conventions, and
+  # gen_targets.py filters to usage=repeater/simplex assignments that
+  # belong to an organization.  Pinning them here is the documented
+  # pattern for a channel that has no catalog record to generate from.
+  #
+  # No expect: block -- calling-frequency use is carrier-squelch simplex
+  # by convention, so there is no claimed CTCSS/DCS to verify.  Leaving
+  # expect off means these grade as no_claim rather than being scored
+  # against a tone that was never claimed in the first place.
+  targets:
+    - name: 2m Calling
+      freq_mhz: 146.520
+      priority: 1
+      decoder: nfm
+    - name: 70cm Calling
+      freq_mhz: 446.000
+      priority: 1
+      decoder: nfm

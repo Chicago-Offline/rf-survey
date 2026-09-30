@@ -68,6 +68,30 @@ monitor:
     - targets-ham-local.yml       # 19 local ham repeaters, priority 2
     - targets-chioff-overlay.yml  # ChiO REPEATER 462.550, priority 1
 
+  # National simplex calling frequencies.  Inline rather than generated:
+  # these are ARRL/FCC band-plan conventions, not a "system" -- no
+  # licensee, no station, no site -- so gen_targets.py has nothing to
+  # select them from (it filters to usage=repeater/simplex assignments
+  # owned by an organization).
+  #
+  # By the rule above, that makes them an open ssrf-lite gap: a band-plan
+  # channel grid belongs in plans/ as a channel plan, not pinned in a
+  # survey plan.  Pinned here until that record exists, then delete.
+  #
+  # No expect: block -- calling-frequency use is carrier-squelch simplex
+  # by convention, so there is no claimed tone to verify.  Omitting
+  # expect grades these no_claim instead of scoring them against a
+  # CTCSS/DCS value nobody ever claimed.
+  targets:
+    - name: 2m Calling
+      freq_mhz: 146.520
+      priority: 1
+      decoder: nfm
+    - name: 70cm Calling
+      freq_mhz: 446.000
+      priority: 1
+      decoder: nfm
+
   # See plan-chicago-monitor.yml for the open 462.550 DCS-vs-CTCSS
   # conflict these targets are meant to settle; it is not restated here
   # so the two plans cannot drift apart on it.

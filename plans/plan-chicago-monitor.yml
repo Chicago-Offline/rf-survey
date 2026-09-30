@@ -41,10 +41,33 @@ monitor:
     - targets-ham-local.yml     # 19 local ham repeaters, priority 2
     - targets-chioff-overlay.yml  # ChiO REPEATER 462.550, priority 1
 
-  # No hand-pinned targets right now, and that is the desired state: a
-  # hand-pinned target is a belief with no catalog record behind it, so
+  # A hand-pinned target is a belief with no catalog record behind it, so
   # each one is really a gap in ssrf-lite.  Add them here only while that
   # gap is open, and delete them once the record exists.
+  #
+  # National simplex calling frequencies.  Inline rather than generated:
+  # these are ARRL/FCC band-plan conventions, not a "system" -- no
+  # licensee, no station, no site -- so gen_targets.py has nothing to
+  # select them from (it filters to usage=repeater/simplex assignments
+  # owned by an organization).
+  #
+  # By the rule above, that makes them an open ssrf-lite gap: a band-plan
+  # channel grid belongs in plans/ as a channel plan, not pinned in a
+  # survey plan.  Pinned here until that record exists, then delete.
+  #
+  # No expect: block -- calling-frequency use is carrier-squelch simplex
+  # by convention, so there is no claimed tone to verify.  Omitting
+  # expect grades these no_claim instead of scoring them against a
+  # CTCSS/DCS value nobody ever claimed.
+  targets:
+    - name: 2m Calling
+      freq_mhz: 146.520
+      priority: 1
+      decoder: nfm
+    - name: 70cm Calling
+      freq_mhz: 446.000
+      priority: 1
+      decoder: nfm
   #
   # 🔴 OPEN CONFLICT on 462.550, deliberately NOT resolved here.
   # The overlays and ssrf-lite core disagree about this frequency:

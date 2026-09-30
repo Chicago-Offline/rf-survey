@@ -14,9 +14,30 @@ Conventions that matter, and why:
 
 * For a repeater assignment we monitor the chain's `rx` leg, because in
   ssrf-lite `rx` is the repeater OUTPUT -- the downlink a receiver can
-  actually hear.  Monitoring `tx` (the 467/144 input) would listen for
-  handhelds we are not in range of and would report every working
+  actually hear.  Monitoring `tx` (the 467/144/448 input) would listen
+  for handhelds we are not in range of and would report every working
   repeater as silent.
+
+  ssrf-lite states this perspective explicitly ("docs: clarify tx/rx
+  perspective is radio-centric"): rx is what YOUR RADIO receives.  It is
+  confirmed by WA9ORC's published data -- 2m is 146.760 out / 146.160 in
+  and the catalog has tx=146.16 rx=146.76; 70cm is 443.750 out /
+  448.750 in and the catalog has tx=448.75 rx=443.75.
+
+  Do NOT "improve" this to min(tx_freq, rx_freq).  The lower leg is the
+  output only when the input sits above it, which is true on 70cm (+5
+  MHz) and false on 2m and 220 (negative offset), so min() silently
+  points every 2m and 220 repeater at its input.
+
+  Simplex records state the frequency once, on rx, and carry a tx block
+  holding only emission -- hence the fallback tests for a frequency
+  rather than for a non-empty leg dict.
+
+  🔴 Caveat: not every system in ssrf-lite has been migrated to this
+  convention.  "fix(cfmc): tx/rx were station-centric, reversed on all 7
+  chains" fixed CFMC only; W9DUP/DARC in DuPage still yields rx=144.83
+  and rx=223.08, which are inputs.  Sanity-check a regenerated list by
+  confirming each channel name matches its frequency before trusting it.
 
 * The expected output tone is `mode.ctcss_rx_hz`, not `ctcss_tx_hz`.
   Those genuinely differ in the wild: the O'Hare .575 GMRS machine in this
@@ -90,10 +111,22 @@ def in_bands(freq, bands):
     return not bands or any(lo <= freq <= hi for lo, hi in bands)
 
 
+def station_orgs(doc):
+    """station_id -> lowercased "orgid orgname" haystack for --org."""
+    orgs = {o["id"]: (o.get("name") or "") for o in
+            doc.get("organizations") or []}
+    out = {}
+    for s in doc.get("stations") or []:
+        oid = s.get("organization_id") or ""
+        out[s["id"]] = f"{oid} {orgs.get(oid, '')}".lower()
+    return out
+
+
 def targets_from_doc(doc, priority, want_usage=("repeater",), origin=None,
-                     max_mi=None, bands=()):
+                     max_mi=None, bands=(), org=None):
     chains = {c["id"]: c for c in doc.get("rf_chains") or []}
     coords = site_coords(doc)
+    orgs = station_orgs(doc)
     out, skipped = [], []
     for a in doc.get("assignments") or []:
         chain = chains.get(a.get("rf_chain_id"))
@@ -103,9 +136,41 @@ def targets_from_doc(doc, priority, want_usage=("repeater",), origin=None,
         if want_usage and a.get("usage") not in want_usage:
             skipped.append((a.get("id"), f"usage={a.get('usage')}"))
             continue
-        # Repeater output. Simplex/base records have no separate output, so
-        # fall back to tx -- for those, tx IS what is on the air.
-        leg = chain.get("rx") or chain.get("tx") or {}
+        # One ssrf-lite file often holds every agency in a town (Evanston
+        # has PD, FD, Public Works, Electric, Water and parking in one
+        # doc).  Filtering here keeps a per-agency target list generated
+        # rather than hand-trimmed, so it can be regenerated when the
+        # catalog changes instead of drifting.
+        if org and org not in orgs.get(chain.get("station_id"), ""):
+            skipped.append((a.get("id"), f"org!={org}"))
+            continue
+        tx_leg = chain.get("tx") or {}
+        rx_leg = chain.get("rx") or {}
+        # Always take the rx leg.  In ssrf-lite, rx is the frequency you
+        # RECEIVE to hear the system -- the repeater output / downlink --
+        # and tx is what you would transmit on, the input / uplink.  (The
+        # RFChain docstring says "transmitter + receiver for a station",
+        # which reads backwards; the data is unambiguous and consistent.
+        # CFMC 70cm is tx=448.75 rx=443.75 and WA9ORC publishes 443.750
+        # output with a +5 MHz input; CFMC 2m is tx=146.16 rx=146.76 and
+        # WA9ORC publishes 146.760 output with -600 kHz; Evanston Fire
+        # dispatch is tx=159.4275 rx=155.6925 and 155.6925 is the
+        # dispatch channel.)
+        #
+        # This previously picked min(tx, rx) on the theory that the lower
+        # leg is the output.  That is offset-sign roulette: right on 70cm
+        # (input +5 MHz), WRONG on 2m and 220 (input below output), so
+        # every 2m and 220 repeater in a generated list was pointed at
+        # its INPUT.  An observer parked on a repeater input hears only
+        # nearby users' uplinks, never the repeater itself, so those
+        # targets read as dead no matter how busy the machine is.
+        #
+        # Simplex records carry the frequency once, on rx, with a tx
+        # block holding only emission.  rx-first handles them for free;
+        # the old "tx_leg or rx_leg" fallback tested dict truthiness,
+        # picked that frequency-less tx block, and silently dropped every
+        # conventional simplex channel (e.g. Evanston Fire Old 154.160).
+        leg = rx_leg if rx_leg.get("freq_mhz") else tx_leg
         freq = leg.get("freq_mhz")
         if not freq:
             skipped.append((a.get("id"), "no freq_mhz"))
@@ -171,6 +236,10 @@ def main(argv=None):
     ap.add_argument("--include", action="append", required=True,
                     help="glob (relative to --ssrf), repeatable")
     ap.add_argument("--priority", type=int, default=2)
+    ap.add_argument("--org", metavar="SUBSTR",
+                    help="only assignments whose station belongs to an "
+                         "organization whose id or name contains SUBSTR "
+                         "(case-insensitive), e.g. --org efd")
     ap.add_argument("--usage", default="repeater",
                     help="comma-separated assignment usages, or 'any'")
     ap.add_argument("--origin", metavar="LAT,LON",
@@ -218,6 +287,7 @@ def main(argv=None):
         with open(path) as fh:
             doc = yaml.safe_load(fh) or {}
         t, s = targets_from_doc(doc, args.priority, usage, origin=origin,
+                                org=(args.org or "").lower() or None,
                                 max_mi=args.max_distance_mi,
                                 bands=tuple(bands))
         targets += t
