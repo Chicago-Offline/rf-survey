@@ -1,5 +1,6 @@
 # 2m amateur FM activity survey
 name: 2m-fm
+description: 2 m amateur FM activity (144-148 MHz) - good first survey
 bands:
   - {start_mhz: 144, stop_mhz: 148, step_khz: 12.5}
 sweep:
