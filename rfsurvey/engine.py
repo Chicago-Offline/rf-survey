@@ -53,8 +53,17 @@ def ppm_tolerance_hz(devcfg, band):
     ppm, and at 150 MHz even 5 ppm is 780 Hz -- a third of a 2.5 kHz
     raster step.  Set ppm_error per device in config.yml once known;
     meta.residual_hz on every observation is the data to calibrate from.
+
+    Deliberately does NOT fall back to devcfg["ppm"].  That key is the
+    correction offset handed to the SDR ("shift me by N ppm"), a
+    different quantity from the error that survives correction.  Treating
+    them as one meant a node carrying the conventional "ppm: 0" -- read
+    as "no correction known" -- silently asserted a perfect receiver,
+    collapsing the post-refine tolerance to half a ~98 Hz bin.  A real
+    transmitter sits a few hundred Hz off nominal, so nothing could snap.
+    Absent a measured ppm_error, assume DEFAULT_PPM rather than perfection.
     """
-    ppm = devcfg.get("ppm_error", devcfg.get("ppm", DEFAULT_PPM))
+    ppm = devcfg.get("ppm_error", DEFAULT_PPM)
     mid_hz = (band["start_mhz"] + band["stop_mhz"]) / 2 * 1e6
     return abs(float(ppm)) * mid_hz / 1e6
 
@@ -154,6 +163,7 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                     # detune the decoder.  Re-measure narrow and fine first,
                     # then both dwell and report at the refined carrier.
                     tune_hz, meas_bin_hz, refined = f, bin_hz, False
+                    refine_refused = False
                     try:
                         c_hz, c_bin, c_snr = sweep.refine_carrier(
                             idx, f, gain=gain)
@@ -162,15 +172,28 @@ def run(cfg, plan, serial, force=False, max_passes=None):
                             log.info("  refined -> %.4f MHz (%+d Hz, snr %.1f dB)",
                                      c_hz / 1e6, c_hz - f, c_snr)
                         else:
-                            log.info("  refine found no peak, using sweep bin")
+                            refine_refused = True
+                            log.info("  no carrier above noise (margin %.1f dB)"
+                                     " -- recording unresolved", c_snr)
                     except sweep.SweepError as e:
                         log.warning("  refine failed, using sweep bin: %s", e)
 
                     gated, gsnr, meta = dwell_mod.dwell(
                         idx, tune_hz, bdwell, gain)
-                    tol = max(meas_bin_hz / 2, ppm_hz) if refined else None
-                    channel_hz, snapped = sweep.snap_channel(
-                        tune_hz, meas_bin_hz, raster_hz, tol)
+                    if refine_refused:
+                        # The narrow re-measure found no carrier, so whatever
+                        # tripped the sweep gate is not a resolvable channel.
+                        # Falling back to the coarse bin here would invent an
+                        # ID: half-bin tolerance is ~39% of the raster, so a
+                        # grid-independent frequency reads "on channel" four
+                        # times in five by luck alone (measured: unrefined
+                        # hits snapped 75%, chance predicts 78%).  Keep the
+                        # energy as evidence, refuse to name it.
+                        channel_hz, snapped = tune_hz, False
+                    else:
+                        tol = max(meas_bin_hz / 2, ppm_hz) if refined else None
+                        channel_hz, snapped = sweep.snap_channel(
+                            tune_hz, meas_bin_hz, raster_hz, tol)
                     meta = dict(meta or {})
                     meta["bin_freq_hz"] = f
                     meta["carrier_hz"] = tune_hz if refined else None

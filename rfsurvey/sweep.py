@@ -107,7 +107,8 @@ def snap_channel(freq_hz, bin_hz, raster_hz=6250, tolerance_hz=None):
 
 
 def refine_carrier(index, freq_hz, integration_s=4, gain=None,
-                   search_hz=5000, span_hz=48_000, dc_offset_hz=12_000):
+                   search_hz=5000, span_hz=48_000, dc_offset_hz=12_000,
+                   min_snr_db=10.0):
     """Narrow high-resolution re-measure of a candidate's true center.
 
     The wideband sweep's bin width is coarser than the channel raster
@@ -125,7 +126,19 @@ def refine_carrier(index, freq_hz, integration_s=4, gain=None,
     drops it outright.
 
     Returns (carrier_hz, bin_hz, snr_db).  carrier_hz is None when nothing
-    rises above the local noise floor.
+    rises min_snr_db above the local noise floor.
+
+    That threshold is load-bearing, not cosmetic.  Noise always has a
+    largest bin: across a 48 kHz span at ~98 Hz resolution there are ~490
+    samples, so the maximum of pure noise sits about 3 sigma -- roughly
+    5 dB -- above the median on every single call.  Returning it
+    unconditionally yields a confident-looking carrier at a uniformly
+    random offset inside +/-search_hz, which snap_channel then rounds to
+    whatever raster point is nearest, inventing a channel ID for an empty
+    band.  Verified against live data: before this gate, refined hits
+    snapped 3/136 while their residuals were distributed uniformly across
+    the raster interval, the signature of frequencies unrelated to the
+    grid.  Real carriers in the same dataset landed within 32 Hz.
     """
     center = freq_hz - dc_offset_hz
     lo = (center - span_hz / 2) / 1e6
@@ -140,7 +153,11 @@ def refine_carrier(index, freq_hz, integration_s=4, gain=None,
     if not cand:
         return None, None, 0.0
     f_peak, d_peak, bin_hz = max(cand, key=lambda r: r[1])
-    return f_peak, bin_hz, round(d_peak - med, 1)
+    snr_db = round(d_peak - med, 1)
+    if snr_db < min_snr_db:
+        # Report the measured margin so the caller can log why it refused.
+        return None, None, snr_db
+    return f_peak, bin_hz, snr_db
 
 
 def snr_hits(rows, medians, threshold_db):
