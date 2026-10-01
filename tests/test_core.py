@@ -234,16 +234,79 @@ class TestRefineCarrier(unittest.TestCase):
         self.assertLess(lo * 1e6, target)
         self.assertGreater(hi * 1e6, target)
 
+    @staticmethod
+    def _noise(i):
+        # Deterministic spread so the test cannot flake, but not flat:
+        # the point is that noise HAS a loudest bin.
+        return -35.0 + ((i * 37) % 13) * 0.4
+
     def test_returns_none_when_only_noise(self):
+        # Regression.  This previously asserted assertIsNotNone, pinning
+        # the defect in place: refine_carrier returned the loudest noise
+        # bin, which across ~490 samples always sits a few dB above the
+        # median.  engine then snapped that uniformly-random frequency to
+        # the nearest raster point and recorded a channel nobody
+        # transmitted.  Measured on live data before the fix: refined hits
+        # snapped 3/136, residuals spread evenly across the raster.
         def fake(index, lo, hi, step_khz, integ, gain=None):
-            return [(159_190_000 + i * 98, -35.0, 97.6) for i in range(400)]
+            return [(159_190_000 + i * 98, self._noise(i), 97.6)
+                    for i in range(400)]
         orig = sweep.run_rtl_power
         sweep.run_rtl_power = fake
         try:
             carrier, bin_hz, snr = sweep.refine_carrier(0, 159_196_875)
         finally:
             sweep.run_rtl_power = orig
-        self.assertIsNotNone(carrier)  # flat noise still yields a max bin
+        self.assertIsNone(carrier)
+        self.assertIsNone(bin_hz)
+        # The measured margin still comes back so the caller can log it.
+        self.assertLess(snr, 10.0)
+
+    def test_accepts_carrier_that_clears_threshold(self):
+        truth = 159_195_000
+
+        def fake(index, lo, hi, step_khz, integ, gain=None):
+            rows = []
+            for i in range(400):
+                f = 159_190_000 + i * 98
+                db = self._noise(i)
+                if abs(f - truth) < 98:
+                    db = -35.0 + 25.0
+                rows.append((f, db, 97.6))
+            return rows
+        orig = sweep.run_rtl_power
+        sweep.run_rtl_power = fake
+        try:
+            carrier, bin_hz, snr = sweep.refine_carrier(0, 159_196_875)
+        finally:
+            sweep.run_rtl_power = orig
+        self.assertIsNotNone(carrier)
+        self.assertAlmostEqual(carrier, truth, delta=150)
+        self.assertGreaterEqual(snr, 10.0)
+
+    def test_threshold_is_tunable(self):
+        # A marginal signal is a policy call, not a hard fact: the caller
+        # can lower the bar deliberately, but must do so explicitly.
+        # Margin is measured against the noise MEDIAN (-32.6 dB here,
+        # not the -35.0 floor), so this carrier clears it by 6.6 dB.
+        def fake(index, lo, hi, step_khz, integ, gain=None):
+            rows = []
+            for i in range(400):
+                f = 159_190_000 + i * 98
+                db = self._noise(i)
+                if abs(f - 159_195_000) < 98:
+                    db = -35.0 + 9.0
+                rows.append((f, db, 97.6))
+            return rows
+        orig = sweep.run_rtl_power
+        sweep.run_rtl_power = fake
+        try:
+            strict, _, _ = sweep.refine_carrier(0, 159_196_875)
+            loose, _, _ = sweep.refine_carrier(0, 159_196_875, min_snr_db=4.0)
+        finally:
+            sweep.run_rtl_power = orig
+        self.assertIsNone(strict)
+        self.assertIsNotNone(loose)
 
 
 class TestStoreReport(unittest.TestCase):
