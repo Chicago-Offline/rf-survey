@@ -19,7 +19,7 @@
 
 schema: rfsurvey.references.v1
 region: chicagoland
-updated: 2026-09-27
+updated: 2026-10-01
 
 references:
   - id: nws-kwo39
@@ -146,22 +146,102 @@ references:
       (OFDM, facility 9617) and has no pilot carrier at all.  A reference
       at 204.309 would measure nothing and poison its own baseline.
 
+  - id: atsc-wls-rf22
+    name: WLS-TV RF 22 ATSC 1.0 pilot
+    freq_hz: 518309441
+    band: uhf
+    kind: continuous
+    expect: very_strong
+    modulation: cw
+    bandwidth_hz: 10000
+    source: https://transition.fcc.gov/fcc-bin/tvq?call=WLS-TV
+    notes: >
+      8VSB pilot 0.309441 MHz above the RF 22 lower edge (518 MHz).
+      FCC tvq verified 2026-10-01: Transmit Channel 22 (518-524 MHz),
+      "ATSC 3.0 (Nextgen TV)? No", 1000 kW ERP, Willis Tower.
+
+  - id: atsc-wttw-rf25
+    name: WTTW RF 25 ATSC 1.0 pilot
+    freq_hz: 536309441
+    band: uhf
+    kind: continuous
+    expect: very_strong
+    modulation: cw
+    bandwidth_hz: 10000
+    source: https://transition.fcc.gov/fcc-bin/tvq?call=WTTW
+    notes: >
+      8VSB pilot 0.309441 MHz above the RF 25 lower edge (536 MHz).
+      FCC tvq verified 2026-10-01: Transmit Channel 25 (536-542 MHz),
+      "ATSC 3.0 (Nextgen TV)? No", 250 kW ERP, Willis Tower.
+
+  - id: atsc-wcpx-rf34
+    name: WCPX-TV RF 34 ATSC 1.0 pilot
+    freq_hz: 590309441
+    band: uhf
+    kind: continuous
+    expect: very_strong
+    modulation: cw
+    bandwidth_hz: 10000
+    source: https://transition.fcc.gov/fcc-bin/tvq?call=WCPX-TV
+    notes: >
+      8VSB pilot 0.309441 MHz above the RF 34 lower edge (590 MHz).
+      FCC tvq verified 2026-10-01: Transmit Channel 34 (590-596 MHz),
+      "ATSC 3.0 (Nextgen TV)? No", facility 10981, 400 kW ERP, Willis
+      Tower.  Top-of-UHF anchor: with RF 19/22/25 this brackets
+      500-590 MHz, the closest constant emitters above the 450-470 LMR
+      band (full-power TV stops at 608 MHz post-repack).
+
+  - id: fm-wrme-877
+    name: WRME-LD 87.75 "MeTV FM" analog aural carrier
+    freq_hz: 87750000
+    band: vhf-low
+    kind: broadcast
+    expect: strong
+    modulation: nfm
+    bandwidth_hz: 50000
+    source: https://en.wikipedia.org/wiki/WRME-LD
+    notes: >
+      Channel 6 "FrankenFM": an LPTV whose analog aural carrier at 87.75
+      sits just below the FM dial.  FCC granted PERMANENT analog-audio
+      authorization in July 2023; 3 kW from Willis Tower.  The only
+      continuous emitter we have below 88 MHz.  NTSC-style aural carrier
+      is FM, so nfm with wide-ish shoulders.  The first beacon pass after
+      adding this entry is the on-air confirmation; a not_heard here
+      never enters a baseline (drift uses status=ok rows only).
+
 # ---------------------------------------------------------------------------
-# UHF (ATSC pilot tones) -- NOT YET POPULATED.  See NETWORK.md S7.
+# Band coverage verdicts (2026-10-01):
 #
-# The UHF land-mobile band (450-470 MHz) is the one we most need calibrated,
-# and it currently has NO usable reference:
+# UHF 470-608 (ATSC pilots): POPULATED above -- RF 19/22/25/34 pilots at
+#   500.309/518.309/536.309/590.309 MHz, each verified against the FCC tvq
+#   record ("ATSC 3.0 (Nextgen TV)? No" => the 1.0 pilot exists).  WBBM
+#   RF 12 stays excluded: ATSC 3.0, no pilot.  Expect these weak on HT
+#   whips; they read no_reference/observed, which is correct and still
+#   tracks the front end over time.
 #
-#   1. No antenna.  Both bench observers run HT dual-band whips that top out
-#      around 450 MHz.  Until something reaches past 450, UHF observers are
-#      correctly reported as `no_reference`, not healthy.
-#   2. No verified entries.  ATSC 1.0 puts a pilot 0.309441 MHz above the
-#      lower edge of its RF channel; for channels 14-36 the lower edge is
-#      470 + (N - 14) * 6 MHz.  Chicago's post-repack channel assignments
-#      have NOT been verified here, and guessed frequencies would poison
-#      every baseline computed against them.
+# 700 MHz: NO TV THERE.  Post-repack full-power TV stops at RF 36
+#   (608 MHz); the old 700 MHz TV channels are now LTE downlinks
+#   (B12/B13/B14-FirstNet, 729-768 MHz).  LTE is a poor fit for THIS
+#   harness: the beacon measurement wants a narrow carrier in quiet
+#   shoulders, but OFDM is a flat ~10 MHz block whose neighbours are more
+#   LTE blocks -- there is no quiet shoulder inside measure()'s window, so
+#   SNR would read a few dB regardless of hardware health.  If >608 MHz
+#   calibration ever matters, it needs a channel-power mode with an
+#   explicit off-band noise window, not a pilot-style entry here.
 #
-# Populate only from a verified source (FCC facility record or a confirmed
-# local scan), one entry per RF channel, with `source:` filled in.
+# VHF-low / "lowband": WRME-LD 87.75 (above) is the only continuous
+#   carrier below the FM dial.  True 30-50 MHz lowband has NO constant
+#   Chicagoland emitter (lowband TV is gone, no lowband paging, IL public
+#   safety left the band decades ago); lowband sweeps therefore run
+#   uncalibrated and must never be scored as healthy.
+#
+# HF: NO off-air reference is usable, for two independent reasons.
+#   1. Hardware: R820T2 tunes down to ~24 MHz, E4000 to ~52 MHz, and the
+#      harness does not drive direct-sampling mode, so WWV/CHU
+#      (2.5-20 MHz) sit below every observer's floor.
+#   2. Physics: even with capable hardware, WWV/CHU levels are
+#      ionosphere-dominated (tens of dB day/night swing).  That measures
+#      PROPAGATION, which S7 explicitly excludes -- a beacon exists to
+#      bound hardware variance.  HF health needs a local injected cal
+#      source, not an off-air beacon.
 # ---------------------------------------------------------------------------
-uhf_references: []
