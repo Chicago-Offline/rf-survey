@@ -121,6 +121,29 @@ class Store:
         self.db.commit()
         return sid
 
+    def last_sweep(self, receiver=None):
+        """{receiver: ts} of the most recent COMPLETED sweep.
+
+        A row lands here only after a sweep finishes, so a stale or missing
+        entry is exactly the signal that a receiver has stopped producing.
+        A hung rtl_power never reaches add_sweep(), so it cannot fake
+        freshness — which is what makes this safe to hang liveness off.
+        """
+        return self._max_ts_by_receiver("sweeps", receiver)
+
+    def last_monitor_check(self, receiver=None):
+        """{receiver: ts} of the most recent monitor check, heard or not."""
+        return self._max_ts_by_receiver("monitor_checks", receiver)
+
+    def _max_ts_by_receiver(self, table, receiver=None):
+        q = f"SELECT receiver, MAX(ts) FROM {table}"
+        args = ()
+        if receiver is not None:
+            q += " WHERE receiver=?"
+            args = (receiver,)
+        q += " GROUP BY receiver"
+        return {r[0]: r[1] for r in self.db.execute(q, args) if r[1] is not None}
+
     def channel_median(self, receiver, freq_hz, tol_hz=0):
         """Per-channel noise median for THIS receiver only (never cross-receiver)."""
         cur = self.db.execute(

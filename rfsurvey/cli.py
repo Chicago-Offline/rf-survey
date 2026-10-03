@@ -197,7 +197,8 @@ def cmd_submit(args, cfg):
             receivers=submit_mod.observer_descriptors(cfg))
         with submit_mod.Publisher(cfg, st) as pub:
             n = pub.publish_pending(store)
-            pub.heartbeat({"pending": len(store.pending_batches())})
+            pub.heartbeat({"pending": len(store.pending_batches()),
+                           **submit_mod.station_health(store, cfg)})
         print(f"submitted {n} batch(es)")
         if not args.loop:
             return 0

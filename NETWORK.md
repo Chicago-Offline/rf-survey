@@ -129,8 +129,24 @@ Topics:
   Each check carries `target` + `ssrf_id` (the catalog join key) and the
   per-parameter grades, none of which survive the generic `observations`
   path.
-- `rfsurvey/status/<station_id>` — heartbeat: uptime, receivers claimed,
-  scan plan hash, last obs ts (retained)
+- `rfsurvey/status/<station_id>` — heartbeat, retained,
+  `schema: rfsurvey.status.v2`: `pending` (unsubmitted batches) plus a
+  `receivers` block carrying, per configured serial, `last_sweep_ts` /
+  `last_sweep_age_s` and `last_check_ts` / `last_check_age_s`, with
+  `stale_after_s` and the `receivers_healthy`/`receivers_total` counts.
+
+  Both timestamps come from tables written only on success, so a hung
+  `rtl_power` cannot fake freshness. This exists because submission
+  liveness and radio liveness are independent: v1 reported only
+  `pending`, so meshpi published a clean heartbeat for days while every
+  sweep was failing and the directory showed it online. Health keys on
+  the most recent of (sweep, check) — either proves the dongle delivered
+  samples, and a monitor-only receiver never sweeps.
+
+  Ages are computed against the station's own clock at publish time, so a
+  consumer must advance them by the heartbeat's own age and recompute
+  `healthy` before trusting it. Liveness only: a heartbeat is never
+  evidence that anything was heard.
 - `rfsurvey/cmd/<station_id>` — reserved for later (plan updates); OFF by
   default, stations never auto-execute remote commands without opt-in
 
