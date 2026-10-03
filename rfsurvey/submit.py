@@ -40,6 +40,48 @@ def observer_descriptors(cfg):
     return out
 
 
+def station_health(store, cfg, now=None):
+    """Per-receiver liveness for the heartbeat (advisory, never evidence).
+
+    Reports how long ago each configured receiver last COMPLETED a sweep and
+    a monitor check. Both come from tables written only on success, so a
+    receiver whose rtl_power is hanging goes stale here even while the submit
+    loop keeps heartbeating happily.
+
+    That gap is the whole point: a station can hold its MQTT session open,
+    publish a clean heartbeat and still have produced nothing on air for
+    days, because submission liveness and radio liveness are independent.
+    Reporting only the pending count made meshpi read "online" through a
+    multi-day outage. These fields are liveness only -- a consumer may
+    degrade a station on them, but must never treat them as an air claim.
+
+    Health keys on the most recent of (sweep, monitor check): either one
+    proves the dongle actually delivered samples. Keying on sweeps alone
+    would falsely condemn a monitor-only receiver, which is a supported
+    role. A receiver configured but never seen reports healthy=False with
+    no timestamps, which is correct: nothing has proven it works.
+    """
+    now = time.time() if now is None else now
+    sweeps = store.last_sweep()
+    checks = store.last_monitor_check()
+    stale_after = int((cfg.get("station") or {}).get("stale_after_s") or 3600)
+    out = {}
+    for serial in sorted(cfg.get("devices") or {}):
+        d = {}
+        for key, ts in (("sweep", sweeps.get(serial)),
+                        ("check", checks.get(serial))):
+            if ts is not None:
+                d["last_" + key + "_ts"] = round(ts, 3)
+                d["last_" + key + "_age_s"] = max(0, int(now - ts))
+        ages = [v for k, v in d.items() if k.endswith("_age_s")]
+        d["healthy"] = bool(ages) and min(ages) <= stale_after
+        out[serial] = d
+    return {"receivers": out,
+            "stale_after_s": stale_after,
+            "receivers_total": len(out),
+            "receivers_healthy": sum(1 for d in out.values() if d["healthy"])}
+
+
 def build_batch(store, station, site=None, receivers=None):
     """Package all unsubmitted evidence into one signed envelope.
 
@@ -175,7 +217,7 @@ class Publisher:
 
     def heartbeat(self, extra=None):
         status = {"station_id": self.station.station_id, "ts": time.time(),
-                  "schema": "rfsurvey.status.v1"}
+                  "schema": "rfsurvey.status.v2"}
         status.update(extra or {})
         self.client.publish(f"{self.prefix}/status/{self.station.station_id}",
                             json.dumps(status), qos=0, retain=True)
