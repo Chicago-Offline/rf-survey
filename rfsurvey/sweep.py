@@ -9,6 +9,39 @@ class SweepError(Exception):
     pass
 
 
+# How long past rtl_power's own -e deadline to wait before calling it hung.
+# A healthy pass exits at integration_s + 30 (the -e bound set below), so
+# this is pure headroom.  It was 120 s, which meant a wedged dongle ate
+# ~2 min per reference: a 12-reference beacon pass then blew its 300 s
+# budget having refreshed only 2 of 12, and the rest aged out as stale.
+TIMEOUT_PAD_S = 45
+
+
+def _recover_wedged(index):
+    """Reset the dongle behind a hung sweep; return a note for the error.
+
+    subprocess.run has already SIGKILLed rtl_power by the time we get
+    here, but that only frees the PID.  The wedge lives in the device, so
+    the next sweep hangs identically -- on meshpi 2026-10-06 that turned
+    one wedge into hours of failed beacon passes.  Reset the USB device so
+    the following attempt starts clean.
+
+    Best-effort by design: never raise out of the recovery path, just
+    report what happened so the SweepError says whether we recovered.
+    """
+    from . import devices, usbreset
+    try:
+        serial = next(d["serial"] for d in devices.list_devices()
+                      if d["index"] == index)
+    except Exception as e:
+        return "; could not identify device %s to reset (%s)" % (index, e)
+    try:
+        node = usbreset.reset_serial(serial)
+    except Exception as e:
+        return "; USB reset of %r failed (%s)" % (serial, e)
+    return "; USB-reset %r at %s" % (serial, node)
+
+
 def run_rtl_power(index, start_mhz, stop_mhz, step_khz, integration_s, gain=None):
     """One rtl_power pass -> [(freq_hz, db, bin_hz)]. Bounded lifetime via -e.
 
@@ -28,9 +61,10 @@ def run_rtl_power(index, start_mhz, stop_mhz, step_khz, integration_s, gain=None
     cmd.append(out.name)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=integration_s + 120)
+                           timeout=integration_s + TIMEOUT_PAD_S)
     except subprocess.TimeoutExpired:
-        raise SweepError("rtl_power hung past its own -e bound")
+        raise SweepError("rtl_power hung past its own -e bound"
+                         + _recover_wedged(index))
     finally:
         rows = _parse_csv(out.name)
         os.unlink(out.name)
